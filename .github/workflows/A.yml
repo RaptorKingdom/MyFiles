@@ -1,4 +1,4 @@
-name: Flutter Web Editor & APK Builder (Bore Tunnel)
+name: Flutter API Builder (Bore Tunnel)
 
 on:
   workflow_dispatch:
@@ -9,12 +9,12 @@ on:
         default: '120'
 
 jobs:
-  flutter-web-editor:
+  flutter-api:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      - name: دریافت کد مخزن
+      - name: دریافت کد مخزن (شامل پروژه فلاتر قبلی)
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -46,33 +46,42 @@ jobs:
       - name: نصب Python و Flask
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 python3-pip
+          sudo apt-get install -y python3 python3-pip zip
           pip3 install flask
 
-      - name: ایجاد پروژه فلاتر (در صورت عدم وجود)
+      - name: اطمینان از وجود پروژه فلاتر (فقط بار اول)
         run: |
           if [ ! -d "flutter_app" ]; then
             flutter create flutter_app
           fi
 
-      - name: نوشتن اسکریپت وب سرور (ویرایشگر + ساخت زنده)
+      - name: نوشتن سرور API (با قابلیت‌های پیشرفته)
         run: |
-          cat << 'PYEOF' > web_editor.py
-          import os, subprocess, threading, time, json, shutil, queue
+          cat << 'PYEOF' > api_server.py
+          import os, subprocess, threading, time, json, shutil, zipfile, io, signal, pty, select
           from datetime import datetime
-          from flask import Flask, request, send_file, redirect, url_for, abort, Response, jsonify
+          from flask import Flask, request, send_file, jsonify, Response, make_response
 
           app = Flask(__name__)
           PROJECT_DIR = os.path.join(os.getcwd(), 'flutter_app')
-          USERNAME = os.environ.get('WEB_USERNAME', '')
-          PASSWORD = os.environ.get('WEB_PASSWORD', '')
+          USERNAME = os.environ['WEB_USERNAME']
+          PASSWORD = os.environ['WEB_PASSWORD']
+          START_TIME = time.time()
+          SESSION_MINUTES = int(os.environ.get('SESSION_MINUTES', 120))
 
-          if not USERNAME or not PASSWORD:
-              raise RuntimeError("نام کاربری یا رمز عبور تنظیم نشده است!")
-
-          # ذخیره وضعیت بیلدها
-          builds = {}
           build_lock = threading.Lock()
+          build_state = {
+              "status": "idle",
+              "process": None,
+              "log_lines": [],
+              "apk_path": None,
+              "error": None,
+              "start_time": None
+          }
+
+          # برای دستورات سفارشی
+          cmd_lock = threading.Lock()
+          running_commands = {}
 
           def check_auth():
               auth = request.authorization
@@ -81,237 +90,402 @@ jobs:
           @app.before_request
           def require_auth():
               if not check_auth():
-                  return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+                  return Response('Unauthorized', 401,
+                      {'WWW-Authenticate': 'Basic realm="Flutter API"'})
 
-          def list_files_recursive(directory, base=''):
-              items = []
-              for name in sorted(os.listdir(directory)):
-                  path = os.path.join(directory, name)
-                  relative = os.path.join(base, name) if base else name
-                  if os.path.isdir(path):
-                      items.append(('dir', relative))
-                      items.extend(list_files_recursive(path, relative))
-                  else:
-                      items.append(('file', relative))
-              return items
-
+          # ==================== مستندات پیشرفته ====================
           @app.route('/')
-          def index():
-              files = list_files_recursive(PROJECT_DIR)
-              # ساخت لیست فایل‌ها
-              file_html = ''
-              for typ, rel in files:
-                  if typ == 'dir':
-                      file_html += f'''
-                      <li class="flex items-center p-3 bg-gray-800 rounded-lg border border-gray-700">
-                          <svg class="w-5 h-5 text-yellow-400 mr-3" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
-                          <span class="text-gray-200 font-medium">{rel}/</span>
-                      </li>'''
+          @app.route('/docs')
+          def docs():
+              return '''<!doctype html>
+          <html lang="en">
+          <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Flutter API Docs</title>
+          <style>
+              * { box-sizing: border-box; }
+              body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1000px; margin: auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
+              h1 { color: #58a6ff; font-size: 2em; margin-top: 0; }
+              h2 { color: #3fb950; border-bottom: 2px solid #30363d; padding-bottom: 8px; margin-top: 30px; }
+              code { background: #161b22; padding: 3px 8px; border-radius: 4px; color: #f0883e; font-size: 0.9em; }
+              pre { background: #161b22; padding: 15px; border-radius: 8px; overflow-x: auto; color: #e6edf3; border: 1px solid #30363d; }
+              .method { color: #ff7b72; font-weight: bold; display: inline-block; min-width: 60px; }
+              .endpoint { color: #7ee787; font-weight: bold; }
+              .section { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; margin: 20px 0; }
+              .warning { background: #2d1b1b; border: 1px solid #ff4444; color: #ff8888; padding: 10px; border-radius: 6px; margin: 10px 0; }
+              table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+              th, td { text-align: left; padding: 10px; border-bottom: 1px solid #30363d; }
+              th { color: #58a6ff; }
+              @media (max-width: 768px) {
+                  body { padding: 10px; }
+                  pre { font-size: 0.8em; }
+              }
+          </style></head>
+          <body>
+          <h1>📘 Flutter Build API</h1>
+          <p>Authentication: <strong>HTTP Basic Auth</strong> (از Secrets مخزن)</p>
+
+          <div class="section">
+              <h2>📡 وضعیت سرور</h2>
+              <p><span class="method">GET</span> <span class="endpoint">/api/status</span> – وضعیت و زمان باقی‌مانده</p>
+              <pre>curl -u user:pass http://host/api/status</pre>
+          </div>
+
+          <div class="section">
+              <h2>📁 مدیریت فایل‌ها</h2>
+              <table>
+                  <tr><th>متد</th><th>آدرس</th><th>توضیح</th></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/files</span></td><td>فهرست کل پروژه (بازگشتی)</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>دریافت محتوای فایل</td></tr>
+                  <tr><td><span class="method">PUT</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>بازنویسی فایل (body = محتوا)</td></tr>
+                  <tr><td><span class="method">DELETE</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>حذف فایل یا پوشه</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/files/&lt;path&gt;?action=mkdir</span></td><td>ایجاد پوشه</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/files/upload</span></td><td>آپلود فایل (multipart, field: file, query: dest)</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/project/export</span></td><td>دانلود کل پروژه (zip)</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/project/info</span></td><td>اطلاعات پروژه (نام، نسخه، پکیج‌ها)</td></tr>
+              </table>
+              <pre># فهرست فایل‌ها
+          curl -u user:pass http://host/api/files
+
+          # دریافت فایل
+          curl -u user:pass http://host/api/files/lib/main.dart
+
+          # ویرایش فایل
+          curl -X PUT -u user:pass -d "import 'package:flutter/material.dart';" http://host/api/files/lib/main.dart
+
+          # حذف فایل
+          curl -X DELETE -u user:pass http://host/api/files/test.txt
+
+          # ایجاد پوشه
+          curl -X POST -u user:pass "http://host/api/files/new_folder?action=mkdir"
+
+          # آپلود فایل
+          curl -X POST -u user:pass -F "file=@local.dart" "http://host/api/files/upload?dest=lib/local.dart"
+
+          # خروجی zip
+          curl -u user:pass -o project.zip http://host/api/project/export</pre>
+          </div>
+
+          <div class="section">
+              <h2>⚡ اجرای هر دستور (Shell)</h2>
+              <div class="warning">⚠️ کاربر می‌تواند هر دستور shell را اجرا کند. دسترسی کامل به محیط.</div>
+              <table>
+                  <tr><th>متد</th><th>آدرس</th><th>توضیح</th></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/exec</span></td><td>اجرای دستور (body: {"command":"ls -la"})</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/exec-async</span></td><td>اجرای غیرهمزمان (body: {"command":"sleep 10"}, برگرداندن job_id)</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/exec-async/&lt;job_id&gt;</span></td><td>بررسی وضعیت job (در حال اجرا / خروجی)</td></tr>
+              </table>
+              <pre># اجرای همزمان (منتظر خروجی می‌ماند)
+          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"flutter pub get"}' http://host/api/exec
+
+          # اجرای غیرهمزمان
+          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"flutter analyze"}' http://host/api/exec-async
+
+          # بررسی job
+          curl -u user:pass http://host/api/exec-async/abc123
+
+          # دستورات عمومی
+          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"ls -la"}' http://host/api/exec
+          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"cat pubspec.yaml"}' http://host/api/exec</pre>
+          </div>
+
+          <div class="section">
+              <h2>🛠️ بیلد APK</h2>
+              <table>
+                  <tr><th>متد</th><th>آدرس</th><th>توضیح</th></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/build</span></td><td>شروع بیلد (arm64-v8a)</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/build</span></td><td>وضعیت + تمام لاگ‌ها</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/download</span></td><td>دانلود APK</td></tr>
+              </table>
+              <pre># شروع بیلد
+          curl -X POST -u user:pass http://host/api/build
+
+          # بررسی پیشرفت
+          curl -u user:pass http://host/api/build
+
+          # دانلود APK
+          curl -u user:pass -o app.apk http://host/api/download</pre>
+          </div>
+
+          <div class="section">
+              <h2>📊 پاسخ وضعیت بیلد</h2>
+              <pre>{
+            "status": "idle|running|success|failed",
+            "log": ["خط ۱\\n", "خط ۲\\n", ...],
+            "apk_available": true|false,
+            "error": null|"پیغام خطا",
+            "start_time": 1234567890.0
+          }</pre>
+          </div>
+          </body></html>'''
+
+          # ==================== وضعیت سرور ====================
+          @app.route('/api/status')
+          def status():
+              elapsed = int(time.time() - START_TIME)
+              remaining = max(0, SESSION_MINUTES * 60 - elapsed)
+              return jsonify({
+                  "uptime_seconds": elapsed,
+                  "remaining_seconds": remaining,
+                  "remaining_minutes": remaining // 60,
+                  "session_minutes": SESSION_MINUTES,
+                  "project_exists": os.path.isdir(PROJECT_DIR),
+                  "flutter_version": subprocess.run(['flutter', '--version'], capture_output=True, text=True, cwd=PROJECT_DIR).stdout.split('\n')[0] if os.path.isdir(PROJECT_DIR) else "N/A"
+              })
+
+          # ==================== مدیریت فایل‌ها ====================
+          def safe_path(rel):
+              full = os.path.normpath(os.path.join(PROJECT_DIR, rel))
+              if not full.startswith(PROJECT_DIR):
+                  return None
+              return full
+
+          @app.route('/api/files', defaults={'filepath': ''})
+          @app.route('/api/files/<path:filepath>', methods=['GET', 'PUT', 'DELETE', 'POST'])
+          def handle_files(filepath):
+              full = safe_path(filepath)
+              if full is None:
+                  return jsonify({"error": "مسیر غیرمجاز"}), 403
+
+              if request.method == 'GET':
+                  if not os.path.exists(full):
+                      return jsonify({"error": "یافت نشد"}), 404
+                  if os.path.isdir(full):
+                      items = []
+                      try:
+                          for name in sorted(os.listdir(full)):
+                              p = os.path.join(full, name)
+                              rel_path = os.path.relpath(p, PROJECT_DIR).replace('\\', '/')
+                              st = os.stat(p)
+                              items.append({
+                                  "name": name,
+                                  "type": "dir" if os.path.isdir(p) else "file",
+                                  "path": rel_path,
+                                  "size": st.st_size,
+                                  "modified": st.st_mtime
+                              })
+                      except PermissionError:
+                          return jsonify({"error": "دسترسی غیرمجاز"}), 403
+                      return jsonify(items)
                   else:
-                      file_html += f'''
-                      <li>
-                          <a href="/edit?file={rel}" class="flex items-center p-3 bg-gray-800 rounded-lg border border-gray-700 hover:bg-gray-700 transition-colors">
-                              <svg class="w-5 h-5 text-blue-400 mr-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
-                              <span class="text-gray-200 font-medium">{rel}</span>
-                          </a>
-                      </li>'''
+                      try:
+                          with open(full, 'r', errors='ignore') as f:
+                              content = f.read()
+                          return jsonify({
+                              "path": filepath,
+                              "content": content,
+                              "size": os.path.getsize(full),
+                              "modified": os.path.getmtime(full)
+                          })
+                      except:
+                          return jsonify({"error": "فایل قابل خواندن نیست"}), 500
 
-              return f'''<!doctype html>
-          <html lang="fa" dir="rtl">
-          <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>ویرایشگر فلاتر</title>
-              <script src="https://cdn.tailwindcss.com"></script>
-              <style>
-                  body {{ background-color: #0f172a; color: #e2e8f0; font-family: 'Vazirmatn', sans-serif; }}
-                  .log-area {{ font-family: 'Fira Code', monospace; }}
-              </style>
-          </head>
-          <body class="min-h-screen flex flex-col items-center p-4">
-              <div class="w-full max-w-4xl">
-                  <h1 class="text-3xl font-bold text-center mb-8 text-purple-400">🚀 ویرایشگر آنلاین فلاتر</h1>
+              elif request.method == 'PUT':
+                  os.makedirs(os.path.dirname(full), exist_ok=True)
+                  content = request.get_data(as_text=True)
+                  with open(full, 'w') as f:
+                      f.write(content)
+                  return jsonify({"status": "ok", "path": filepath, "size": len(content)})
 
-                  <!-- بخش فایل‌ها -->
-                  <div class="bg-gray-900 rounded-2xl shadow-xl p-6 mb-8 border border-gray-800">
-                      <h2 class="text-xl font-bold mb-4 text-blue-300">📁 فایل‌های پروژه</h2>
-                      <ul class="space-y-2">
-                          {file_html}
-                      </ul>
-                  </div>
+              elif request.method == 'DELETE':
+                  if not os.path.exists(full):
+                      return jsonify({"error": "یافت نشد"}), 404
+                  try:
+                      if os.path.isdir(full):
+                          shutil.rmtree(full)
+                      else:
+                          os.remove(full)
+                      return jsonify({"status": "deleted"})
+                  except Exception as e:
+                      return jsonify({"error": str(e)}), 500
 
-                  <!-- بخش ساخت APK -->
-                  <div class="bg-gray-900 rounded-2xl shadow-xl p-6 border border-gray-800" id="build-section">
-                      <h2 class="text-xl font-bold mb-4 text-green-300">🛠️ ساخت APK</h2>
-                      <button id="build-btn" onclick="startBuild()"
-                              class="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-purple-400">
-                          شروع ساخت (arm64-v8a)
-                      </button>
-                      <div id="build-status" class="mt-3 text-sm"></div>
+              elif request.method == 'POST':
+                  action = request.args.get('action', '')
+                  if action == 'mkdir':
+                      os.makedirs(full, exist_ok=True)
+                      return jsonify({"status": "directory created"})
+                  return jsonify({"error": "action نامعتبر"}), 400
 
-                      <!-- لاگ -->
-                      <div id="log-container" class="hidden mt-4">
-                          <div class="flex justify-between items-center mb-2">
-                              <span class="text-gray-400 text-sm">📄 خروجی کامپایل</span>
-                              <button onclick="copyLog()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded-lg transition-colors">
-                                  📋 کپی لاگ
-                              </button>
-                          </div>
-                          <pre id="log-output" class="log-area bg-gray-950 text-green-400 p-4 rounded-lg overflow-auto max-h-96 border border-gray-700 text-xs"></pre>
-                      </div>
+          @app.route('/api/files/upload', methods=['POST'])
+          def upload_file():
+              if 'file' not in request.files:
+                  return jsonify({"error": "فایلی ارسال نشده"}), 400
+              file = request.files['file']
+              if file.filename == '':
+                  return jsonify({"error": "نام فایل خالی"}), 400
+              dest = request.args.get('dest', file.filename)
+              if not dest:
+                  return jsonify({"error": "مسیر مقصد مشخص نشده"}), 400
+              full = safe_path(dest)
+              if full is None:
+                  return jsonify({"error": "مسیر غیرمجاز"}), 403
+              os.makedirs(os.path.dirname(full), exist_ok=True)
+              file.save(full)
+              return jsonify({"status": "uploaded", "path": dest, "size": os.path.getsize(full)})
 
-                      <!-- دکمه دانلود -->
-                      <div id="download-container" class="hidden mt-4">
-                          <a id="download-link" href="#" class="inline-flex items-center px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors">
-                              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                              دانلود APK
-                          </a>
-                      </div>
-                  </div>
-              </div>
+          @app.route('/api/project/export')
+          def export_project():
+              memory_file = io.BytesIO()
+              with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+                  for root, dirs, files in os.walk(PROJECT_DIR):
+                      dirs[:] = [d for d in dirs if d not in ['.dart_tool', 'build', '.gradle', 'android/.gradle']]
+                      for file in files:
+                          full_path = os.path.join(root, file)
+                          arcname = os.path.relpath(full_path, PROJECT_DIR)
+                          zf.write(full_path, arcname)
+              memory_file.seek(0)
+              return send_file(memory_file, mimetype='application/zip',
+                               as_attachment=True, download_name='flutter_project.zip')
 
-              <script>
-                  let buildId = null;
-                  let eventSource = null;
-                  let logText = '';
+          @app.route('/api/project/info')
+          def project_info():
+              pubspec = os.path.join(PROJECT_DIR, 'pubspec.yaml')
+              info = {"project_dir": PROJECT_DIR}
+              if os.path.exists(pubspec):
+                  with open(pubspec, 'r') as f:
+                      content = f.read()
+                  info['pubspec_content'] = content
+                  for line in content.split('\n'):
+                      line = line.strip()
+                      if line.startswith('name:'):
+                          info['name'] = line.split(':')[1].strip()
+                      elif line.startswith('version:'):
+                          info['version'] = line.split(':')[1].strip()
+                      elif line.startswith('description:'):
+                          info['description'] = line.split(':', 1)[1].strip()
+              # تعداد فایل‌ها
+              file_count = sum(len(files) for _, _, files in os.walk(PROJECT_DIR))
+              info['total_files'] = file_count
+              return jsonify(info)
 
-                  function startBuild() {{
-                      const btn = document.getElementById('build-btn');
-                      btn.disabled = true;
-                      btn.textContent = 'در حال شروع...';
-                      document.getElementById('build-status').innerHTML = '<span class="text-yellow-400">⏳ شروع فرآیند ساخت...</span>';
-                      document.getElementById('log-container').classList.add('hidden');
-                      document.getElementById('download-container').classList.add('hidden');
-                      document.getElementById('log-output').textContent = '';
-                      logText = '';
+          # ==================== اجرای دستورات ====================
+          @app.route('/api/exec', methods=['POST'])
+          def exec_command():
+              data = request.get_json(silent=True)
+              if not data or 'command' not in data:
+                  return jsonify({"error": "فیلد command لازم است"}), 400
+              cmd = data['command']
+              timeout = data.get('timeout', 300)  # 5 دقیقه پیش‌فرض
+              working_dir = data.get('working_dir', PROJECT_DIR)
+              if not os.path.isdir(working_dir):
+                  return jsonify({"error": "مسیر کاری نامعتبر"}), 400
+              try:
+                  result = subprocess.run(
+                      cmd,
+                      shell=True,
+                      cwd=working_dir,
+                      capture_output=True,
+                      text=True,
+                      timeout=timeout
+                  )
+                  return jsonify({
+                      "stdout": result.stdout,
+                      "stderr": result.stderr,
+                      "exit_code": result.returncode,
+                      "command": cmd
+                  })
+              except subprocess.TimeoutExpired:
+                  return jsonify({"error": f"زمان اجرا ({timeout}s) پایان یافت"}), 504
+              except Exception as e:
+                  return jsonify({"error": str(e)}), 500
 
-                      fetch('/start-build')
-                          .then(r => r.json())
-                          .then(data => {{
-                              if (data.error) {{
-                                  alert(data.error);
-                                  btn.disabled = false;
-                                  btn.textContent = 'شروع ساخت (arm64-v8a)';
-                                  return;
-                              }}
-                              buildId = data.build_id;
-                              document.getElementById('build-status').innerHTML = '<span class="text-blue-400">🔄 ساخت آغاز شد (شناسه: ' + buildId + ')</span>';
-                              btn.textContent = 'در حال ساخت...';
-                              connectLogStream(buildId);
-                          }})
-                          .catch(err => {{
-                              alert('خطا در برقراری ارتباط: ' + err);
-                              btn.disabled = false;
-                              btn.textContent = 'شروع ساخت (arm64-v8a)';
-                          }});
-                  }}
+          @app.route('/api/exec-async', methods=['POST'])
+          def exec_async():
+              data = request.get_json(silent=True)
+              if not data or 'command' not in data:
+                  return jsonify({"error": "فیلد command لازم است"}), 400
+              cmd = data['command']
+              timeout = data.get('timeout', 300)
+              working_dir = data.get('working_dir', PROJECT_DIR)
+              job_id = datetime.now().strftime('%Y%m%d%H%M%S%f')
+              with cmd_lock:
+                  running_commands[job_id] = {
+                      "command": cmd,
+                      "start_time": time.time(),
+                      "status": "running",
+                      "stdout": [],
+                      "stderr": [],
+                      "exit_code": None,
+                      "process": None
+                  }
+              t = threading.Thread(target=_run_async_cmd, args=(job_id, cmd, timeout, working_dir))
+              t.daemon = True
+              t.start()
+              return jsonify({"job_id": job_id, "command": cmd, "status": "running"})
 
-                  function connectLogStream(buildId) {{
-                      if (eventSource) eventSource.close();
-                      eventSource = new EventSource('/build-log/' + buildId);
+          def _run_async_cmd(job_id, cmd, timeout, working_dir):
+              try:
+                  process = subprocess.Popen(
+                      cmd,
+                      shell=True,
+                      cwd=working_dir,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE,
+                      text=True
+                  )
+                  with cmd_lock:
+                      if job_id in running_commands:
+                          running_commands[job_id]['process'] = process
+                  stdout_lines = []
+                  stderr_lines = []
+                  for line in process.stdout:
+                      stdout_lines.append(line)
+                      with cmd_lock:
+                          if job_id in running_commands:
+                              running_commands[job_id]['stdout'].append(line)
+                  for line in process.stderr:
+                      stderr_lines.append(line)
+                      with cmd_lock:
+                          if job_id in running_commands:
+                              running_commands[job_id]['stderr'].append(line)
+                  process.wait()
+                  with cmd_lock:
+                      if job_id in running_commands:
+                          running_commands[job_id]['status'] = 'done'
+                          running_commands[job_id]['exit_code'] = process.returncode
+              except Exception as e:
+                  with cmd_lock:
+                      if job_id in running_commands:
+                          running_commands[job_id]['status'] = 'error'
+                          running_commands[job_id]['error'] = str(e)
 
-                      eventSource.addEventListener('log', function(e) {{
-                          const line = JSON.parse(e.data).line;
-                          logText += line;
-                          document.getElementById('log-output').textContent = logText;
-                          const container = document.getElementById('log-container');
-                          container.classList.remove('hidden');
-                          // اسکرول خودکار به پایین
-                          const pre = document.getElementById('log-output');
-                          pre.scrollTop = pre.scrollHeight;
-                      }});
+          @app.route('/api/exec-async/<job_id>')
+          def exec_async_status(job_id):
+              with cmd_lock:
+                  if job_id not in running_commands:
+                      return jsonify({"error": "job_id نامعتبر"}), 404
+                  job = running_commands[job_id]
+                  response = {
+                      "job_id": job_id,
+                      "command": job['command'],
+                      "status": job['status'],
+                      "stdout": ''.join(job['stdout']),
+                      "stderr": ''.join(job['stderr']),
+                      "exit_code": job['exit_code']
+                  }
+                  if job['status'] == 'done' or job['status'] == 'error':
+                      del running_commands[job_id]
+                  return jsonify(response)
 
-                      eventSource.addEventListener('done', function(e) {{
-                          const data = JSON.parse(e.data);
-                          const btn = document.getElementById('build-btn');
-                          btn.disabled = false;
-                          btn.textContent = 'شروع ساخت (arm64-v8a)';
-                          eventSource.close();
-                          if (data.success) {{
-                              document.getElementById('build-status').innerHTML = '<span class="text-green-400">✅ ساخت با موفقیت انجام شد!</span>';
-                              const link = document.getElementById('download-link');
-                              link.href = '/download-apk/' + buildId;
-                              document.getElementById('download-container').classList.remove('hidden');
-                          }} else {{
-                              document.getElementById('build-status').innerHTML = '<span class="text-red-400">❌ ساخت ناموفق بود. لاگ را بررسی کنید.</span>';
-                          }}
-                      }});
+          # ==================== بیلد ====================
+          @app.route('/api/build', methods=['POST'])
+          def start_build():
+              global build_state
+              with build_lock:
+                  if build_state['status'] == 'running':
+                      return jsonify({"error": "یک بیلد در حال انجام است"}), 409
+                  build_state['status'] = 'running'
+                  build_state['log_lines'] = []
+                  build_state['apk_path'] = None
+                  build_state['error'] = None
+                  build_state['start_time'] = time.time()
+                  build_state['process'] = None
+              t = threading.Thread(target=run_build)
+              t.daemon = True
+              t.start()
+              return jsonify({"status": "running", "message": "بیلد شروع شد"})
 
-                      eventSource.onerror = function(e) {{
-                          // بستن اتصال در صورت بروز خطا
-                          eventSource.close();
-                      }};
-                  }}
-
-                  function copyLog() {{
-                      const log = document.getElementById('log-output').textContent;
-                      if (!log) return;
-                      navigator.clipboard.writeText(log).then(() => {{
-                          alert('لاگ در کلیپ‌بورد کپی شد.');
-                      }}).catch(() => {{
-                          alert('خطا در کپی کردن.');
-                      }});
-                  }}
-              </script>
-          </body>
-          </html>'''
-
-          @app.route('/edit')
-          def edit():
-              file_rel = request.args.get('file', '')
-              if not file_rel or '../' in file_rel:
-                  abort(400)
-              filepath = os.path.normpath(os.path.join(PROJECT_DIR, file_rel))
-              if not filepath.startswith(PROJECT_DIR):
-                  abort(403)
-              if not os.path.isfile(filepath):
-                  abort(404)
-              with open(filepath, 'r', errors='ignore') as f:
-                  content = f.read()
-              # escape minimal for HTML
-              content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-              return f'''<!doctype html>
-          <html lang="fa" dir="rtl">
-          <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>ویرایش {file_rel}</title>
-              <script src="https://cdn.tailwindcss.com"></script>
-          </head>
-          <body class="bg-gray-900 text-gray-200 min-h-screen p-4">
-              <div class="max-w-4xl mx-auto">
-                  <h1 class="text-2xl font-bold mb-4 text-purple-400">✏️ ویرایش فایل: {file_rel}</h1>
-                  <form method="post" action="/save?file={file_rel}" class="space-y-4">
-                      <textarea name="content" rows="25" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-4 font-mono text-sm text-green-300 focus:ring-2 focus:ring-purple-500 focus:outline-none">{content}</textarea>
-                      <div class="flex justify-between">
-                          <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">💾 ذخیره</button>
-                          <a href="/" class="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg transition-colors">بازگشت</a>
-                      </div>
-                  </form>
-              </div>
-          </body>
-          </html>'''
-
-          @app.route('/save', methods=['POST'])
-          def save():
-              file_rel = request.args.get('file', '')
-              if not file_rel or '../' in file_rel:
-                  abort(400)
-              filepath = os.path.normpath(os.path.join(PROJECT_DIR, file_rel))
-              if not filepath.startswith(PROJECT_DIR):
-                  abort(403)
-              content = request.form['content']
-              with open(filepath, 'w') as f:
-                  f.write(content)
-              return redirect(url_for('index'))
-
-          # ======== مسیرهای ساخت ========
-          def run_build(build_id):
-              """اجرای flutter build در یک ترد جداگانه"""
-              log_file = os.path.join(PROJECT_DIR, f'build_{build_id}.log')
-              with open(log_file, 'w') as f:
-                  pass  # فایل خالی
-              apk_output = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
+          def run_build():
+              global build_state
               try:
                   process = subprocess.Popen(
                       ['flutter', 'build', 'apk', '--target-platform', 'android-arm64'],
@@ -322,98 +496,58 @@ jobs:
                       bufsize=1
                   )
                   with build_lock:
-                      builds[build_id]['process'] = process
-
-                  # خواندن خروجی خط به خط
+                      build_state['process'] = process
                   for line in iter(process.stdout.readline, ''):
-                      if not line and process.poll() is not None:
-                          break
                       with build_lock:
-                          builds[build_id]['log_lines'].append(line)
-                      with open(log_file, 'a') as lf:
-                          lf.write(line)
-
+                          build_state['log_lines'].append(line)
                   process.wait()
                   success = process.returncode == 0
-                  with build_lock:
-                      builds[build_id]['status'] = 'success' if success else 'failed'
-                      if success:
-                          # کپی APK به مسیر مخصوص
-                          dest_apk = os.path.join('static', f'{build_id}.apk')
+                  if success:
+                      apk_src = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
+                      if os.path.exists(apk_src):
+                          dest = os.path.join('static', 'latest.apk')
                           os.makedirs('static', exist_ok=True)
-                          if os.path.exists(apk_output):
-                              shutil.copy2(apk_output, dest_apk)
-                              builds[build_id]['apk_path'] = dest_apk
-                          else:
-                              builds[build_id]['status'] = 'failed'
-                              builds[build_id]['log_lines'].append('\n[ERROR] فایل APK یافت نشد.\n')
+                          shutil.copy2(apk_src, dest)
+                          with build_lock:
+                              build_state['status'] = 'success'
+                              build_state['apk_path'] = dest
+                      else:
+                          with build_lock:
+                              build_state['status'] = 'failed'
+                              build_state['error'] = 'APK یافت نشد'
+                  else:
+                      with build_lock:
+                          build_state['status'] = 'failed'
+                          build_state['error'] = 'بیلد ناموفق'
               except Exception as e:
                   with build_lock:
-                      builds[build_id]['status'] = 'failed'
-                      builds[build_id]['log_lines'].append(f'\n[ERROR] {str(e)}\n')
+                      build_state['status'] = 'failed'
+                      build_state['error'] = str(e)
 
-          @app.route('/start-build')
-          def start_build():
-              build_id = datetime.now().strftime('%Y%m%d%H%M%S%f')
+          @app.route('/api/build', methods=['GET'])
+          def build_status():
               with build_lock:
-                  builds[build_id] = {
-                      'log_lines': [],
-                      'process': None,
-                      'status': 'running',
-                      'apk_path': None
-                  }
-              # اجرا در ترد جدا
-              t = threading.Thread(target=run_build, args=(build_id,))
-              t.daemon = True
-              t.start()
-              return jsonify({'build_id': build_id})
+                  apk_available = build_state['apk_path'] is not None and os.path.exists(build_state['apk_path'])
+                  return jsonify({
+                      "status": build_state['status'],
+                      "log": build_state['log_lines'],
+                      "apk_available": apk_available,
+                      "error": build_state['error'],
+                      "start_time": build_state.get('start_time')
+                  })
 
-          @app.route('/build-log/<build_id>')
-          def build_log(build_id):
-              if build_id not in builds:
-                  return jsonify({'error': 'شناسه نامعتبر'}), 404
-
-              def generate():
-                  last_index = 0
-                  while True:
-                      with build_lock:
-                          log_lines = builds[build_id]['log_lines'][:]
-                          status = builds[build_id]['status']
-                      # ارسال خطوط جدید
-                      while last_index < len(log_lines):
-                          line = log_lines[last_index]
-                          yield f"event: log\ndata: {json.dumps({'line': line})}\n\n"
-                          last_index += 1
-                      if status != 'running':
-                          # ارسال رویداد پایان
-                          success = status == 'success'
-                          yield f"event: done\ndata: {json.dumps({'success': success})}\n\n"
-                          break
-                      time.sleep(0.2)
-
-              return Response(
-                  generate(),
-                  mimetype='text/event-stream',
-                  headers={
-                      'Cache-Control': 'no-cache',
-                      'Connection': 'keep-alive',
-                      'X-Accel-Buffering': 'no'
-                  }
-              )
-
-          @app.route('/download-apk/<build_id>')
-          def download_apk_route(build_id):
+          @app.route('/api/download')
+          def download_apk():
               with build_lock:
-                  build = builds.get(build_id)
-                  if not build or not build['apk_path'] or not os.path.exists(build['apk_path']):
-                      return 'APK آماده نیست یا وجود ندارد.', 404
-                  return send_file(build['apk_path'], as_attachment=True, download_name='app-arm64.apk')
+                  if build_state['apk_path'] and os.path.exists(build_state['apk_path']):
+                      return send_file(build_state['apk_path'], as_attachment=True, download_name='app-arm64.apk')
+              return jsonify({"error": "APK آماده نیست"}), 404
 
           if __name__ == '__main__':
-              app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+              app.run(host='0.0.0.0', port=5000, threaded=True)
           PYEOF
 
-      - name: راه‌اندازی وب سرور
+      - name: راه‌اندازی سرور API
         run: |
           if [ -z "${{ secrets.RDP_USERNAME }}" ] || [ -z "${{ secrets.RDP_PASSWORD }}" ]; then
             echo "::error::لطفاً RDP_USERNAME و RDP_PASSWORD را در Secrets مخزن تعریف کنید."
@@ -421,8 +555,9 @@ jobs:
           fi
           export WEB_USERNAME="${{ secrets.RDP_USERNAME }}"
           export WEB_PASSWORD="${{ secrets.RDP_PASSWORD }}"
-          nohup python3 web_editor.py > web_server.log 2>&1 &
-          echo "وب سرور روی پورت 5000 آغاز به کار کرد"
+          export SESSION_MINUTES="${{ github.event.inputs.session_minutes }}"
+          nohup python3 api_server.py > api_server.log 2>&1 &
+          echo "سرور API روی پورت 5000 آغاز به کار کرد"
 
       - name: دریافت و راه‌اندازی bore
         run: |
@@ -440,37 +575,19 @@ jobs:
           echo "BORE_URL=$BORE_URL" >> $GITHUB_ENV
           echo "آدرس عمومی: http://$BORE_URL"
 
-      - name: به‌روزرسانی و کامیت README.md
+      - name: به‌روزرسانی README (فقط لینک)
         run: |
           WEB_URL="http://${{ env.BORE_URL }}"
-          USERNAME="${{ secrets.RDP_USERNAME }}"
-          EXPIRY=$(date -u -d "${{ github.event.inputs.session_minutes }} minutes" +"%Y-%m-%d %H:%M:%S UTC")
-
-          NEW_SECTION="## 🚀 ویرایشگر آنلاین فلاتر\n"
-          NEW_SECTION+="**آدرس:** \`$WEB_URL\`  \n"
-          NEW_SECTION+="**نام کاربری:** \`$USERNAME\`  \n"
-          NEW_SECTION+="**رمز عبور:** (در Secrets مخزن ذخیره شده)  \n"
-          NEW_SECTION+="**انقضا:** $EXPIRY  \n"
-
-          if [ ! -f README.md ]; then
-            echo -e "$NEW_SECTION" > README.md
-          else
-            if grep -q '## 🚀 ویرایشگر آنلاین فلاتر' README.md; then
-              sed -i '/## 🚀 ویرایشگر آنلاین فلاتر/,$d' README.md
-            fi
-            sed -i '/^$/d' README.md
-            echo -e "\n$NEW_SECTION" >> README.md
-          fi
-
+          echo "$WEB_URL" > README.md
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --quiet README.md; then
-            echo "هیچ تغییری در README.md وجود ندارد."
+            echo "README تغییری نکرده است."
           else
             git add README.md
-            git commit -m "به‌روزرسانی آدرس ویرایشگر فلاتر [skip ci]"
+            git commit -m "لینک API [skip ci]"
             git push
-            echo "آدرس ویرایشگر در README.md درج و push شد."
+            echo "README با لینک عمومی به‌روز شد."
           fi
 
       - name: زنده نگه‌داشتن نشست
@@ -485,18 +602,20 @@ jobs:
           done
           echo "زمان به پایان رسید."
 
-      - name: کامیت تغییرات نهایی پروژه فلاتر
+      - name: کامیت تغییرات پروژه فلاتر (ذخیره برای دفعات بعد)
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet flutter_app/; then
-            echo "پروژه فلاتر تغییری نداشته است."
-          else
-            git add flutter_app/
-            git commit -m "ذخیره تغییرات پروژه فلاتر [skip ci]"
-            git push
-            echo "تغییرات پروژه فلاتر کامیت و push شد."
+          if [ -d "flutter_app" ]; then
+            if git diff --quiet flutter_app/ && [ -z "$(git ls-files --others --exclude-standard flutter_app/)" ]; then
+              echo "پروژه فلاتر تغییری نداشته است."
+            else
+              git add flutter_app/
+              git commit -m "ذخیره تغییرات پروژه فلاتر [skip ci]"
+              git push
+              echo "پروژه فلاتر برای اجرای بعدی ذخیره شد."
+            fi
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
