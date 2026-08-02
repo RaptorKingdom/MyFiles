@@ -12,11 +12,6 @@ jobs:
   flutter-web-editor:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    container:
-      image: cirrusci/flutter:latest
-    defaults:
-      run:
-        shell: bash
 
     steps:
       - name: دریافت کد مخزن
@@ -24,7 +19,19 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: کش (cache) برای افزایش سرعت
+      - name: نصب Java 17 (برای ساخت اندروید)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: نصب Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'   # آخرین نسخه پایدار در زمان نگارش
+          channel: 'stable'
+
+      - name: کش برای افزایش سرعت
         uses: actions/cache@v4
         with:
           path: |
@@ -38,9 +45,9 @@ jobs:
 
       - name: نصب Python و Flask
         run: |
-          apt-get update
-          apt-get install -y python3 python3-pip
-          python3 -m pip install flask
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install flask
 
       - name: ایجاد پروژه فلاتر (در صورت عدم وجود)
         run: |
@@ -194,28 +201,22 @@ jobs:
           USERNAME="${{ secrets.RDP_USERNAME }}"
           EXPIRY=$(date -u -d "${{ github.event.inputs.session_minutes }} minutes" +"%Y-%m-%d %H:%M:%S UTC")
 
-          # ساخت بخش جدید
           NEW_SECTION="## 🚀 ویرایشگر آنلاین فلاتر\n"
           NEW_SECTION+="**آدرس:** \`$WEB_URL\`  \n"
           NEW_SECTION+="**نام کاربری:** \`$USERNAME\`  \n"
           NEW_SECTION+="**رمز عبور:** (در Secrets مخزن ذخیره شده)  \n"
           NEW_SECTION+="**انقضا:** $EXPIRY  \n"
 
-          # اعمال تغییرات در فایل
           if [ ! -f README.md ]; then
             echo -e "$NEW_SECTION" > README.md
           else
             if grep -q '## 🚀 ویرایشگر آنلاین فلاتر' README.md; then
               sed -i '/## 🚀 ویرایشگر آنلاین فلاتر/,$d' README.md
             fi
-            # حذف خطوط خالی اضافی انتهای فایل (در صورت وجود)
             sed -i '/^$/d' README.md
             echo -e "\n$NEW_SECTION" >> README.md
           fi
 
-          echo "README.md به روز شد."
-
-          # کامیت و push فوری README
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --quiet README.md; then
@@ -224,7 +225,7 @@ jobs:
             git add README.md
             git commit -m "به‌روزرسانی آدرس ویرایشگر فلاتر [skip ci]"
             git push
-            echo "README.md کامیت و push شد."
+            echo "آدرس ویرایشگر در README.md درج و push شد."
           fi
 
       - name: زنده نگه‌داشتن نشست
@@ -245,7 +246,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --quiet flutter_app/; then
-            echo "هیچ تغییری در پروژه فلاتر وجود ندارد."
+            echo "پروژه فلاتر تغییری نداشته است."
           else
             git add flutter_app/
             git commit -m "ذخیره تغییرات پروژه فلاتر [skip ci]"
