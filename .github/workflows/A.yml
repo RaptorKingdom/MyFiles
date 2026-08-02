@@ -19,7 +19,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: نصب Java 17 (برای ساخت اندروید)
+      - name: نصب Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -28,7 +28,7 @@ jobs:
       - name: نصب Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'   # آخرین نسخه پایدار در زمان نگارش
+          flutter-version: '3.22.0'
           channel: 'stable'
 
       - name: کش برای افزایش سرعت
@@ -55,11 +55,12 @@ jobs:
             flutter create flutter_app
           fi
 
-      - name: نوشتن اسکریپت وب سرور ویرایشگر
+      - name: نوشتن اسکریپت وب سرور (ویرایشگر + ساخت زنده)
         run: |
           cat << 'PYEOF' > web_editor.py
-          import os, subprocess
-          from flask import Flask, request, send_file, redirect, url_for, abort
+          import os, subprocess, threading, time, json, shutil, queue
+          from datetime import datetime
+          from flask import Flask, request, send_file, redirect, url_for, abort, Response, jsonify
 
           app = Flask(__name__)
           PROJECT_DIR = os.path.join(os.getcwd(), 'flutter_app')
@@ -68,6 +69,10 @@ jobs:
 
           if not USERNAME or not PASSWORD:
               raise RuntimeError("نام کاربری یا رمز عبور تنظیم نشده است!")
+
+          # ذخیره وضعیت بیلدها
+          builds = {}
+          build_lock = threading.Lock()
 
           def check_auth():
               auth = request.authorization
@@ -93,15 +98,163 @@ jobs:
           @app.route('/')
           def index():
               files = list_files_recursive(PROJECT_DIR)
-              html = '''<!doctype html><html><head><meta charset="utf-8"><title>ویرایشگر فلاتر</title></head>
-              <body><h2>فایل‌های پروژه</h2><ul>'''
+              # ساخت لیست فایل‌ها
+              file_html = ''
               for typ, rel in files:
                   if typ == 'dir':
-                      html += f'<li><b>{rel}/</b></li>'
+                      file_html += f'''
+                      <li class="flex items-center p-3 bg-gray-800 rounded-lg border border-gray-700">
+                          <svg class="w-5 h-5 text-yellow-400 mr-3" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>
+                          <span class="text-gray-200 font-medium">{rel}/</span>
+                      </li>'''
                   else:
-                      html += f'<li><a href="/edit?file={rel}">{rel}</a></li>'
-              html += '''</ul><br><a href="/build"><button>ساخت APK</button></a></body></html>'''
-              return html
+                      file_html += f'''
+                      <li>
+                          <a href="/edit?file={rel}" class="flex items-center p-3 bg-gray-800 rounded-lg border border-gray-700 hover:bg-gray-700 transition-colors">
+                              <svg class="w-5 h-5 text-blue-400 mr-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
+                              <span class="text-gray-200 font-medium">{rel}</span>
+                          </a>
+                      </li>'''
+
+              return f'''<!doctype html>
+          <html lang="fa" dir="rtl">
+          <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>ویرایشگر فلاتر</title>
+              <script src="https://cdn.tailwindcss.com"></script>
+              <style>
+                  body {{ background-color: #0f172a; color: #e2e8f0; font-family: 'Vazirmatn', sans-serif; }}
+                  .log-area {{ font-family: 'Fira Code', monospace; }}
+              </style>
+          </head>
+          <body class="min-h-screen flex flex-col items-center p-4">
+              <div class="w-full max-w-4xl">
+                  <h1 class="text-3xl font-bold text-center mb-8 text-purple-400">🚀 ویرایشگر آنلاین فلاتر</h1>
+
+                  <!-- بخش فایل‌ها -->
+                  <div class="bg-gray-900 rounded-2xl shadow-xl p-6 mb-8 border border-gray-800">
+                      <h2 class="text-xl font-bold mb-4 text-blue-300">📁 فایل‌های پروژه</h2>
+                      <ul class="space-y-2">
+                          {file_html}
+                      </ul>
+                  </div>
+
+                  <!-- بخش ساخت APK -->
+                  <div class="bg-gray-900 rounded-2xl shadow-xl p-6 border border-gray-800" id="build-section">
+                      <h2 class="text-xl font-bold mb-4 text-green-300">🛠️ ساخت APK</h2>
+                      <button id="build-btn" onclick="startBuild()"
+                              class="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-purple-400">
+                          شروع ساخت (arm64-v8a)
+                      </button>
+                      <div id="build-status" class="mt-3 text-sm"></div>
+
+                      <!-- لاگ -->
+                      <div id="log-container" class="hidden mt-4">
+                          <div class="flex justify-between items-center mb-2">
+                              <span class="text-gray-400 text-sm">📄 خروجی کامپایل</span>
+                              <button onclick="copyLog()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded-lg transition-colors">
+                                  📋 کپی لاگ
+                              </button>
+                          </div>
+                          <pre id="log-output" class="log-area bg-gray-950 text-green-400 p-4 rounded-lg overflow-auto max-h-96 border border-gray-700 text-xs"></pre>
+                      </div>
+
+                      <!-- دکمه دانلود -->
+                      <div id="download-container" class="hidden mt-4">
+                          <a id="download-link" href="#" class="inline-flex items-center px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors">
+                              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                              دانلود APK
+                          </a>
+                      </div>
+                  </div>
+              </div>
+
+              <script>
+                  let buildId = null;
+                  let eventSource = null;
+                  let logText = '';
+
+                  function startBuild() {{
+                      const btn = document.getElementById('build-btn');
+                      btn.disabled = true;
+                      btn.textContent = 'در حال شروع...';
+                      document.getElementById('build-status').innerHTML = '<span class="text-yellow-400">⏳ شروع فرآیند ساخت...</span>';
+                      document.getElementById('log-container').classList.add('hidden');
+                      document.getElementById('download-container').classList.add('hidden');
+                      document.getElementById('log-output').textContent = '';
+                      logText = '';
+
+                      fetch('/start-build')
+                          .then(r => r.json())
+                          .then(data => {{
+                              if (data.error) {{
+                                  alert(data.error);
+                                  btn.disabled = false;
+                                  btn.textContent = 'شروع ساخت (arm64-v8a)';
+                                  return;
+                              }}
+                              buildId = data.build_id;
+                              document.getElementById('build-status').innerHTML = '<span class="text-blue-400">🔄 ساخت آغاز شد (شناسه: ' + buildId + ')</span>';
+                              btn.textContent = 'در حال ساخت...';
+                              connectLogStream(buildId);
+                          }})
+                          .catch(err => {{
+                              alert('خطا در برقراری ارتباط: ' + err);
+                              btn.disabled = false;
+                              btn.textContent = 'شروع ساخت (arm64-v8a)';
+                          }});
+                  }}
+
+                  function connectLogStream(buildId) {{
+                      if (eventSource) eventSource.close();
+                      eventSource = new EventSource('/build-log/' + buildId);
+
+                      eventSource.addEventListener('log', function(e) {{
+                          const line = JSON.parse(e.data).line;
+                          logText += line;
+                          document.getElementById('log-output').textContent = logText;
+                          const container = document.getElementById('log-container');
+                          container.classList.remove('hidden');
+                          // اسکرول خودکار به پایین
+                          const pre = document.getElementById('log-output');
+                          pre.scrollTop = pre.scrollHeight;
+                      }});
+
+                      eventSource.addEventListener('done', function(e) {{
+                          const data = JSON.parse(e.data);
+                          const btn = document.getElementById('build-btn');
+                          btn.disabled = false;
+                          btn.textContent = 'شروع ساخت (arm64-v8a)';
+                          eventSource.close();
+                          if (data.success) {{
+                              document.getElementById('build-status').innerHTML = '<span class="text-green-400">✅ ساخت با موفقیت انجام شد!</span>';
+                              const link = document.getElementById('download-link');
+                              link.href = '/download-apk/' + buildId;
+                              document.getElementById('download-container').classList.remove('hidden');
+                          }} else {{
+                              document.getElementById('build-status').innerHTML = '<span class="text-red-400">❌ ساخت ناموفق بود. لاگ را بررسی کنید.</span>';
+                          }}
+                      }});
+
+                      eventSource.onerror = function(e) {{
+                          // بستن اتصال در صورت بروز خطا
+                          eventSource.close();
+                      }};
+                  }}
+
+                  function copyLog() {{
+                      const log = document.getElementById('log-output').textContent;
+                      if (!log) return;
+                      navigator.clipboard.writeText(log).then(() => {{
+                          alert('لاگ در کلیپ‌بورد کپی شد.');
+                      }}).catch(() => {{
+                          alert('خطا در کپی کردن.');
+                      }});
+                  }}
+              </script>
+          </body>
+          </html>'''
 
           @app.route('/edit')
           def edit():
@@ -115,12 +268,29 @@ jobs:
                   abort(404)
               with open(filepath, 'r', errors='ignore') as f:
                   content = f.read()
-              return f'''<!doctype html><html><head><meta charset="utf-8"><title>ویرایش {file_rel}</title></head>
-              <body><h3>ویرایش: {file_rel}</h3>
-              <form method="post" action="/save?file={file_rel}">
-              <textarea name="content" rows="30" cols="100">{content}</textarea><br>
-              <button type="submit">ذخیره</button>
-              </form><br><a href="/">بازگشت</a></body></html>'''
+              # escape minimal for HTML
+              content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+              return f'''<!doctype html>
+          <html lang="fa" dir="rtl">
+          <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>ویرایش {file_rel}</title>
+              <script src="https://cdn.tailwindcss.com"></script>
+          </head>
+          <body class="bg-gray-900 text-gray-200 min-h-screen p-4">
+              <div class="max-w-4xl mx-auto">
+                  <h1 class="text-2xl font-bold mb-4 text-purple-400">✏️ ویرایش فایل: {file_rel}</h1>
+                  <form method="post" action="/save?file={file_rel}" class="space-y-4">
+                      <textarea name="content" rows="25" class="w-full bg-gray-800 border border-gray-700 rounded-lg p-4 font-mono text-sm text-green-300 focus:ring-2 focus:ring-purple-500 focus:outline-none">{content}</textarea>
+                      <div class="flex justify-between">
+                          <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">💾 ذخیره</button>
+                          <a href="/" class="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg transition-colors">بازگشت</a>
+                      </div>
+                  </form>
+              </div>
+          </body>
+          </html>'''
 
           @app.route('/save', methods=['POST'])
           def save():
@@ -135,37 +305,112 @@ jobs:
                   f.write(content)
               return redirect(url_for('index'))
 
-          @app.route('/build')
-          def build():
+          # ======== مسیرهای ساخت ========
+          def run_build(build_id):
+              """اجرای flutter build در یک ترد جداگانه"""
+              log_file = os.path.join(PROJECT_DIR, f'build_{build_id}.log')
+              with open(log_file, 'w') as f:
+                  pass  # فایل خالی
+              apk_output = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
               try:
-                  result = subprocess.run(
+                  process = subprocess.Popen(
                       ['flutter', 'build', 'apk', '--target-platform', 'android-arm64'],
                       cwd=PROJECT_DIR,
-                      capture_output=True,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT,
                       text=True,
-                      timeout=600
+                      bufsize=1
                   )
-                  if result.returncode == 0:
-                      apk_path = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
-                      if os.path.exists(apk_path):
-                          return '<h3>ساخت موفق بود!</h3><a href="/download-apk">دانلود APK</a><br><a href="/">بازگشت</a>'
-                      else:
-                          return '<h3>ساخت موفق اما APK یافت نشد.</h3>'
-                  else:
-                      return f'<h3>ساخت ناموفق:</h3><pre>{result.stderr}</pre>'
-              except subprocess.TimeoutExpired:
-                  return '<h3>زمان ساخت به پایان رسید.</h3>'
+                  with build_lock:
+                      builds[build_id]['process'] = process
 
-          @app.route('/download-apk')
-          def download_apk():
-              apk_path = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
-              if os.path.exists(apk_path):
-                  return send_file(apk_path, as_attachment=True, download_name='app-release.apk')
-              else:
-                  return 'APK وجود ندارد. ابتدا build کنید.', 404
+                  # خواندن خروجی خط به خط
+                  for line in iter(process.stdout.readline, ''):
+                      if not line and process.poll() is not None:
+                          break
+                      with build_lock:
+                          builds[build_id]['log_lines'].append(line)
+                      with open(log_file, 'a') as lf:
+                          lf.write(line)
+
+                  process.wait()
+                  success = process.returncode == 0
+                  with build_lock:
+                      builds[build_id]['status'] = 'success' if success else 'failed'
+                      if success:
+                          # کپی APK به مسیر مخصوص
+                          dest_apk = os.path.join('static', f'{build_id}.apk')
+                          os.makedirs('static', exist_ok=True)
+                          if os.path.exists(apk_output):
+                              shutil.copy2(apk_output, dest_apk)
+                              builds[build_id]['apk_path'] = dest_apk
+                          else:
+                              builds[build_id]['status'] = 'failed'
+                              builds[build_id]['log_lines'].append('\n[ERROR] فایل APK یافت نشد.\n')
+              except Exception as e:
+                  with build_lock:
+                      builds[build_id]['status'] = 'failed'
+                      builds[build_id]['log_lines'].append(f'\n[ERROR] {str(e)}\n')
+
+          @app.route('/start-build')
+          def start_build():
+              build_id = datetime.now().strftime('%Y%m%d%H%M%S%f')
+              with build_lock:
+                  builds[build_id] = {
+                      'log_lines': [],
+                      'process': None,
+                      'status': 'running',
+                      'apk_path': None
+                  }
+              # اجرا در ترد جدا
+              t = threading.Thread(target=run_build, args=(build_id,))
+              t.daemon = True
+              t.start()
+              return jsonify({'build_id': build_id})
+
+          @app.route('/build-log/<build_id>')
+          def build_log(build_id):
+              if build_id not in builds:
+                  return jsonify({'error': 'شناسه نامعتبر'}), 404
+
+              def generate():
+                  last_index = 0
+                  while True:
+                      with build_lock:
+                          log_lines = builds[build_id]['log_lines'][:]
+                          status = builds[build_id]['status']
+                      # ارسال خطوط جدید
+                      while last_index < len(log_lines):
+                          line = log_lines[last_index]
+                          yield f"event: log\ndata: {json.dumps({'line': line})}\n\n"
+                          last_index += 1
+                      if status != 'running':
+                          # ارسال رویداد پایان
+                          success = status == 'success'
+                          yield f"event: done\ndata: {json.dumps({'success': success})}\n\n"
+                          break
+                      time.sleep(0.2)
+
+              return Response(
+                  generate(),
+                  mimetype='text/event-stream',
+                  headers={
+                      'Cache-Control': 'no-cache',
+                      'Connection': 'keep-alive',
+                      'X-Accel-Buffering': 'no'
+                  }
+              )
+
+          @app.route('/download-apk/<build_id>')
+          def download_apk_route(build_id):
+              with build_lock:
+                  build = builds.get(build_id)
+                  if not build or not build['apk_path'] or not os.path.exists(build['apk_path']):
+                      return 'APK آماده نیست یا وجود ندارد.', 404
+                  return send_file(build['apk_path'], as_attachment=True, download_name='app-arm64.apk')
 
           if __name__ == '__main__':
-              app.run(host='0.0.0.0', port=5000, debug=False)
+              app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
           PYEOF
 
       - name: راه‌اندازی وب سرور
@@ -179,7 +424,7 @@ jobs:
           nohup python3 web_editor.py > web_server.log 2>&1 &
           echo "وب سرور روی پورت 5000 آغاز به کار کرد"
 
-      - name: دریافت و راه‌اندازی bore برای تونل
+      - name: دریافت و راه‌اندازی bore
         run: |
           wget -q https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
           tar xzf bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
