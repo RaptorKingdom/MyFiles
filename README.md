@@ -1,1 +1,1 @@
-http://bore.pub:14282
+http://bore.pub:9305
