@@ -55,17 +55,17 @@ jobs:
             flutter create flutter_app
           fi
 
-      - name: نوشتن سرور API (با قابلیت‌های پیشرفته)
+      - name: نوشتن سرور API
         run: |
           cat << 'PYEOF' > api_server.py
-          import os, subprocess, threading, time, json, shutil, zipfile, io, signal, pty, select
+          import os, subprocess, threading, time, json, shutil, zipfile, io
           from datetime import datetime
-          from flask import Flask, request, send_file, jsonify, Response, make_response
+          from flask import Flask, request, send_file, jsonify, Response
 
           app = Flask(__name__)
           PROJECT_DIR = os.path.join(os.getcwd(), 'flutter_app')
-          USERNAME = os.environ['WEB_USERNAME']
-          PASSWORD = os.environ['WEB_PASSWORD']
+          USERNAME = os.environ['RDP_USERNAME']
+          PASSWORD = os.environ['RDP_PASSWORD']
           START_TIME = time.time()
           SESSION_MINUTES = int(os.environ.get('SESSION_MINUTES', 120))
 
@@ -79,7 +79,6 @@ jobs:
               "start_time": None
           }
 
-          # برای دستورات سفارشی
           cmd_lock = threading.Lock()
           running_commands = {}
 
@@ -93,7 +92,7 @@ jobs:
                   return Response('Unauthorized', 401,
                       {'WWW-Authenticate': 'Basic realm="Flutter API"'})
 
-          # ==================== مستندات پیشرفته ====================
+          # ==================== مستندات ====================
           @app.route('/')
           @app.route('/docs')
           def docs():
@@ -115,18 +114,14 @@ jobs:
               table { width: 100%; border-collapse: collapse; margin: 15px 0; }
               th, td { text-align: left; padding: 10px; border-bottom: 1px solid #30363d; }
               th { color: #58a6ff; }
-              @media (max-width: 768px) {
-                  body { padding: 10px; }
-                  pre { font-size: 0.8em; }
-              }
           </style></head>
           <body>
           <h1>📘 Flutter Build API</h1>
-          <p>Authentication: <strong>HTTP Basic Auth</strong> (از Secrets مخزن)</p>
+          <p>Authentication: <strong>HTTP Basic Auth</strong></p>
 
           <div class="section">
               <h2>📡 وضعیت سرور</h2>
-              <p><span class="method">GET</span> <span class="endpoint">/api/status</span> – وضعیت و زمان باقی‌مانده</p>
+              <p><span class="method">GET</span> <span class="endpoint">/api/status</span></p>
               <pre>curl -u user:pass http://host/api/status</pre>
           </div>
 
@@ -134,87 +129,37 @@ jobs:
               <h2>📁 مدیریت فایل‌ها</h2>
               <table>
                   <tr><th>متد</th><th>آدرس</th><th>توضیح</th></tr>
-                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/files</span></td><td>فهرست کل پروژه (بازگشتی)</td></tr>
-                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>دریافت محتوای فایل</td></tr>
-                  <tr><td><span class="method">PUT</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>بازنویسی فایل (body = محتوا)</td></tr>
-                  <tr><td><span class="method">DELETE</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>حذف فایل یا پوشه</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/files</span></td><td>فهرست کل پروژه</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>دریافت محتوا</td></tr>
+                  <tr><td><span class="method">PUT</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>بازنویسی فایل</td></tr>
+                  <tr><td><span class="method">DELETE</span></td><td><span class="endpoint">/api/files/&lt;path&gt;</span></td><td>حذف فایل/پوشه</td></tr>
                   <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/files/&lt;path&gt;?action=mkdir</span></td><td>ایجاد پوشه</td></tr>
-                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/files/upload</span></td><td>آپلود فایل (multipart, field: file, query: dest)</td></tr>
-                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/project/export</span></td><td>دانلود کل پروژه (zip)</td></tr>
-                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/project/info</span></td><td>اطلاعات پروژه (نام، نسخه، پکیج‌ها)</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/files/upload</span></td><td>آپلود (multipart, field: file, query: dest)</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/project/export</span></td><td>دانلود ZIP</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/project/info</span></td><td>اطلاعات پروژه</td></tr>
               </table>
-              <pre># فهرست فایل‌ها
-          curl -u user:pass http://host/api/files
-
-          # دریافت فایل
-          curl -u user:pass http://host/api/files/lib/main.dart
-
-          # ویرایش فایل
-          curl -X PUT -u user:pass -d "import 'package:flutter/material.dart';" http://host/api/files/lib/main.dart
-
-          # حذف فایل
-          curl -X DELETE -u user:pass http://host/api/files/test.txt
-
-          # ایجاد پوشه
-          curl -X POST -u user:pass "http://host/api/files/new_folder?action=mkdir"
-
-          # آپلود فایل
-          curl -X POST -u user:pass -F "file=@local.dart" "http://host/api/files/upload?dest=lib/local.dart"
-
-          # خروجی zip
-          curl -u user:pass -o project.zip http://host/api/project/export</pre>
           </div>
 
           <div class="section">
-              <h2>⚡ اجرای هر دستور (Shell)</h2>
-              <div class="warning">⚠️ کاربر می‌تواند هر دستور shell را اجرا کند. دسترسی کامل به محیط.</div>
+              <h2>⚡ اجرای دستور (هر چیزی)</h2>
+              <div class="warning">⚠️ دسترسی کامل به shell. هر دستوری قابل اجراست.</div>
               <table>
                   <tr><th>متد</th><th>آدرس</th><th>توضیح</th></tr>
-                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/exec</span></td><td>اجرای دستور (body: {"command":"ls -la"})</td></tr>
-                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/exec-async</span></td><td>اجرای غیرهمزمان (body: {"command":"sleep 10"}, برگرداندن job_id)</td></tr>
-                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/exec-async/&lt;job_id&gt;</span></td><td>بررسی وضعیت job (در حال اجرا / خروجی)</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/exec</span></td><td>اجرای همزمان</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/exec-async</span></td><td>اجرای غیرهمزمان</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/exec-async/&lt;job_id&gt;</span></td><td>وضعیت job</td></tr>
               </table>
-              <pre># اجرای همزمان (منتظر خروجی می‌ماند)
-          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"flutter pub get"}' http://host/api/exec
-
-          # اجرای غیرهمزمان
-          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"flutter analyze"}' http://host/api/exec-async
-
-          # بررسی job
-          curl -u user:pass http://host/api/exec-async/abc123
-
-          # دستورات عمومی
-          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"ls -la"}' http://host/api/exec
-          curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"cat pubspec.yaml"}' http://host/api/exec</pre>
+              <pre>curl -X POST -u user:pass -H "Content-Type: application/json" -d '{"command":"ls -la"}' http://host/api/exec</pre>
           </div>
 
           <div class="section">
-              <h2>🛠️ بیلد APK</h2>
+              <h2>🛠️ بیلد</h2>
               <table>
                   <tr><th>متد</th><th>آدرس</th><th>توضیح</th></tr>
-                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/build</span></td><td>شروع بیلد (arm64-v8a)</td></tr>
-                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/build</span></td><td>وضعیت + تمام لاگ‌ها</td></tr>
+                  <tr><td><span class="method">POST</span></td><td><span class="endpoint">/api/build</span></td><td>شروع بیلد</td></tr>
+                  <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/build</span></td><td>وضعیت + تمام لاگ</td></tr>
                   <tr><td><span class="method">GET</span></td><td><span class="endpoint">/api/download</span></td><td>دانلود APK</td></tr>
               </table>
-              <pre># شروع بیلد
-          curl -X POST -u user:pass http://host/api/build
-
-          # بررسی پیشرفت
-          curl -u user:pass http://host/api/build
-
-          # دانلود APK
-          curl -u user:pass -o app.apk http://host/api/download</pre>
-          </div>
-
-          <div class="section">
-              <h2>📊 پاسخ وضعیت بیلد</h2>
-              <pre>{
-            "status": "idle|running|success|failed",
-            "log": ["خط ۱\\n", "خط ۲\\n", ...],
-            "apk_available": true|false,
-            "error": null|"پیغام خطا",
-            "start_time": 1234567890.0
-          }</pre>
           </div>
           </body></html>'''
 
@@ -228,8 +173,7 @@ jobs:
                   "remaining_seconds": remaining,
                   "remaining_minutes": remaining // 60,
                   "session_minutes": SESSION_MINUTES,
-                  "project_exists": os.path.isdir(PROJECT_DIR),
-                  "flutter_version": subprocess.run(['flutter', '--version'], capture_output=True, text=True, cwd=PROJECT_DIR).stdout.split('\n')[0] if os.path.isdir(PROJECT_DIR) else "N/A"
+                  "project_exists": os.path.isdir(PROJECT_DIR)
               })
 
           # ==================== مدیریت فایل‌ها ====================
@@ -251,33 +195,27 @@ jobs:
                       return jsonify({"error": "یافت نشد"}), 404
                   if os.path.isdir(full):
                       items = []
-                      try:
-                          for name in sorted(os.listdir(full)):
-                              p = os.path.join(full, name)
-                              rel_path = os.path.relpath(p, PROJECT_DIR).replace('\\', '/')
-                              st = os.stat(p)
-                              items.append({
-                                  "name": name,
-                                  "type": "dir" if os.path.isdir(p) else "file",
-                                  "path": rel_path,
-                                  "size": st.st_size,
-                                  "modified": st.st_mtime
-                              })
-                      except PermissionError:
-                          return jsonify({"error": "دسترسی غیرمجاز"}), 403
+                      for name in sorted(os.listdir(full)):
+                          p = os.path.join(full, name)
+                          rel_path = os.path.relpath(p, PROJECT_DIR).replace('\\', '/')
+                          st = os.stat(p)
+                          items.append({
+                              "name": name,
+                              "type": "dir" if os.path.isdir(p) else "file",
+                              "path": rel_path,
+                              "size": st.st_size,
+                              "modified": st.st_mtime
+                          })
                       return jsonify(items)
                   else:
-                      try:
-                          with open(full, 'r', errors='ignore') as f:
-                              content = f.read()
-                          return jsonify({
-                              "path": filepath,
-                              "content": content,
-                              "size": os.path.getsize(full),
-                              "modified": os.path.getmtime(full)
-                          })
-                      except:
-                          return jsonify({"error": "فایل قابل خواندن نیست"}), 500
+                      with open(full, 'r', errors='ignore') as f:
+                          content = f.read()
+                      return jsonify({
+                          "path": filepath,
+                          "content": content,
+                          "size": os.path.getsize(full),
+                          "modified": os.path.getmtime(full)
+                      })
 
               elif request.method == 'PUT':
                   os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -289,14 +227,11 @@ jobs:
               elif request.method == 'DELETE':
                   if not os.path.exists(full):
                       return jsonify({"error": "یافت نشد"}), 404
-                  try:
-                      if os.path.isdir(full):
-                          shutil.rmtree(full)
-                      else:
-                          os.remove(full)
-                      return jsonify({"status": "deleted"})
-                  except Exception as e:
-                      return jsonify({"error": str(e)}), 500
+                  if os.path.isdir(full):
+                      shutil.rmtree(full)
+                  else:
+                      os.remove(full)
+                  return jsonify({"status": "deleted"})
 
               elif request.method == 'POST':
                   action = request.args.get('action', '')
@@ -310,8 +245,6 @@ jobs:
               if 'file' not in request.files:
                   return jsonify({"error": "فایلی ارسال نشده"}), 400
               file = request.files['file']
-              if file.filename == '':
-                  return jsonify({"error": "نام فایل خالی"}), 400
               dest = request.args.get('dest', file.filename)
               if not dest:
                   return jsonify({"error": "مسیر مقصد مشخص نشده"}), 400
@@ -343,7 +276,6 @@ jobs:
               if os.path.exists(pubspec):
                   with open(pubspec, 'r') as f:
                       content = f.read()
-                  info['pubspec_content'] = content
                   for line in content.split('\n'):
                       line = line.strip()
                       if line.startswith('name:'):
@@ -352,7 +284,6 @@ jobs:
                           info['version'] = line.split(':')[1].strip()
                       elif line.startswith('description:'):
                           info['description'] = line.split(':', 1)[1].strip()
-              # تعداد فایل‌ها
               file_count = sum(len(files) for _, _, files in os.walk(PROJECT_DIR))
               info['total_files'] = file_count
               return jsonify(info)
@@ -364,24 +295,17 @@ jobs:
               if not data or 'command' not in data:
                   return jsonify({"error": "فیلد command لازم است"}), 400
               cmd = data['command']
-              timeout = data.get('timeout', 300)  # 5 دقیقه پیش‌فرض
+              timeout = data.get('timeout', 300)
               working_dir = data.get('working_dir', PROJECT_DIR)
-              if not os.path.isdir(working_dir):
-                  return jsonify({"error": "مسیر کاری نامعتبر"}), 400
               try:
                   result = subprocess.run(
-                      cmd,
-                      shell=True,
-                      cwd=working_dir,
-                      capture_output=True,
-                      text=True,
-                      timeout=timeout
+                      cmd, shell=True, cwd=working_dir,
+                      capture_output=True, text=True, timeout=timeout
                   )
                   return jsonify({
                       "stdout": result.stdout,
                       "stderr": result.stderr,
-                      "exit_code": result.returncode,
-                      "command": cmd
+                      "exit_code": result.returncode
                   })
               except subprocess.TimeoutExpired:
                   return jsonify({"error": f"زمان اجرا ({timeout}s) پایان یافت"}), 504
@@ -400,40 +324,27 @@ jobs:
               with cmd_lock:
                   running_commands[job_id] = {
                       "command": cmd,
-                      "start_time": time.time(),
                       "status": "running",
                       "stdout": [],
                       "stderr": [],
-                      "exit_code": None,
-                      "process": None
+                      "exit_code": None
                   }
               t = threading.Thread(target=_run_async_cmd, args=(job_id, cmd, timeout, working_dir))
               t.daemon = True
               t.start()
-              return jsonify({"job_id": job_id, "command": cmd, "status": "running"})
+              return jsonify({"job_id": job_id, "status": "running"})
 
           def _run_async_cmd(job_id, cmd, timeout, working_dir):
               try:
                   process = subprocess.Popen(
-                      cmd,
-                      shell=True,
-                      cwd=working_dir,
-                      stdout=subprocess.PIPE,
-                      stderr=subprocess.PIPE,
-                      text=True
+                      cmd, shell=True, cwd=working_dir,
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                   )
-                  with cmd_lock:
-                      if job_id in running_commands:
-                          running_commands[job_id]['process'] = process
-                  stdout_lines = []
-                  stderr_lines = []
                   for line in process.stdout:
-                      stdout_lines.append(line)
                       with cmd_lock:
                           if job_id in running_commands:
                               running_commands[job_id]['stdout'].append(line)
                   for line in process.stderr:
-                      stderr_lines.append(line)
                       with cmd_lock:
                           if job_id in running_commands:
                               running_commands[job_id]['stderr'].append(line)
@@ -454,7 +365,7 @@ jobs:
                   if job_id not in running_commands:
                       return jsonify({"error": "job_id نامعتبر"}), 404
                   job = running_commands[job_id]
-                  response = {
+                  resp = {
                       "job_id": job_id,
                       "command": job['command'],
                       "status": job['status'],
@@ -462,9 +373,9 @@ jobs:
                       "stderr": ''.join(job['stderr']),
                       "exit_code": job['exit_code']
                   }
-                  if job['status'] == 'done' or job['status'] == 'error':
+                  if job['status'] in ('done', 'error'):
                       del running_commands[job_id]
-                  return jsonify(response)
+                  return jsonify(resp)
 
           # ==================== بیلد ====================
           @app.route('/api/build', methods=['POST'])
@@ -553,8 +464,8 @@ jobs:
             echo "::error::لطفاً RDP_USERNAME و RDP_PASSWORD را در Secrets مخزن تعریف کنید."
             exit 1
           fi
-          export WEB_USERNAME="${{ secrets.RDP_USERNAME }}"
-          export WEB_PASSWORD="${{ secrets.RDP_PASSWORD }}"
+          export RDP_USERNAME="${{ secrets.RDP_USERNAME }}"
+          export RDP_PASSWORD="${{ secrets.RDP_PASSWORD }}"
           export SESSION_MINUTES="${{ github.event.inputs.session_minutes }}"
           nohup python3 api_server.py > api_server.log 2>&1 &
           echo "سرور API روی پورت 5000 آغاز به کار کرد"
