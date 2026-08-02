@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     container:
-      image: cirrusci/flutter:latest   # سبک، شامل Flutter SDK و Android SDK
+      image: cirrusci/flutter:latest
 
     steps:
       - name: دریافت کد مخزن
@@ -33,14 +33,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-flutter-
 
+      - name: نصب Python و Flask
+        run: |
+          apt-get update
+          apt-get install -y python3 python3-pip
+          python3 -m pip install flask
+
       - name: ایجاد پروژه فلاتر (در صورت عدم وجود)
         run: |
           if [ ! -d "flutter_app" ]; then
             flutter create flutter_app
           fi
-
-      - name: نصب Flask (پیش‌نیاز وب سرور)
-        run: pip install flask
 
       - name: نوشتن اسکریپت وب سرور ویرایشگر
         run: |
