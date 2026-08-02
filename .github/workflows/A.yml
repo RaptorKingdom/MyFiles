@@ -1,198 +1,220 @@
-name: Windows RDP with bore (Auto-Update README)
+name: Flutter Web Editor & APK Builder (Bore Tunnel)
 
 on:
   workflow_dispatch:
     inputs:
       session_minutes:
-        description: 'Duration in minutes'
+        description: 'مدت زمان اجرا (دقیقه)'
         required: true
         default: '120'
 
 jobs:
-  rdp-tunnel:
-    runs-on: windows-latest
+  flutter-web-editor:
+    runs-on: ubuntu-latest
     timeout-minutes: 360
+    container:
+      image: cirrusci/flutter:latest   # سبک، شامل Flutter SDK و Android SDK
 
     steps:
-      - name: Checkout repository
+      - name: دریافت کد مخزن
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable RDP and create user
-        shell: powershell
+      - name: کش (cache) برای افزایش سرعت
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.gradle/caches
+            flutter_app/.dart_tool
+            flutter_app/build
+          key: ${{ runner.os }}-flutter-${{ hashFiles('flutter_app/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-
+
+      - name: ایجاد پروژه فلاتر (در صورت عدم وجود)
         run: |
-          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
-          netsh advfirewall firewall set rule group="Remote Desktop" new enable=yes
-          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+          if [ ! -d "flutter_app" ]; then
+            flutter create flutter_app
+          fi
 
-          $username = "${{ secrets.RDP_USERNAME }}"
-          $password = "${{ secrets.RDP_PASSWORD }}"
+      - name: نصب Flask (پیش‌نیاز وب سرور)
+        run: pip install flask
 
-          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
-            Remove-LocalUser -Name $username
-          }
+      - name: نوشتن اسکریپت وب سرور ویرایشگر
+        run: |
+          cat << 'PYEOF' > web_editor.py
+          import os, subprocess
+          from flask import Flask, request, send_file, redirect, url_for, abort
 
-          try {
-            $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-            New-LocalUser -Name $username -Password $securePass -FullName "Remote Desktop User"
-            Add-LocalGroupMember -Group "Administrators" -Member $username
-            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-            Write-Host "User $username created and RDP enabled."
-          } catch {
-            Write-Host "ERROR: $_"
+          app = Flask(__name__)
+          PROJECT_DIR = os.path.join(os.getcwd(), 'flutter_app')
+          USERNAME = os.environ['WEB_USERNAME']
+          PASSWORD = os.environ['WEB_PASSWORD']
+
+          def check_auth():
+              auth = request.authorization
+              return auth and auth.username == USERNAME and auth.password == PASSWORD
+
+          @app.before_request
+          def require_auth():
+              if not check_auth():
+                  return ('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+          def list_files_recursive(directory, base=''):
+              items = []
+              for name in sorted(os.listdir(directory)):
+                  path = os.path.join(directory, name)
+                  relative = os.path.join(base, name) if base else name
+                  if os.path.isdir(path):
+                      items.append(('dir', relative))
+                      items.extend(list_files_recursive(path, relative))
+                  else:
+                      items.append(('file', relative))
+              return items
+
+          @app.route('/')
+          def index():
+              files = list_files_recursive(PROJECT_DIR)
+              html = '''<!doctype html><html><head><meta charset="utf-8"><title>ویرایشگر فلاتر</title></head>
+              <body><h2>فایل‌های پروژه</h2><ul>'''
+              for typ, rel in files:
+                  if typ == 'dir':
+                      html += f'<li><b>{rel}/</b></li>'
+                  else:
+                      html += f'<li><a href="/edit?file={rel}">{rel}</a></li>'
+              html += '''</ul><br><a href="/build"><button>ساخت APK</button></a></body></html>'''
+              return html
+
+          @app.route('/edit')
+          def edit():
+              file_rel = request.args.get('file', '')
+              if not file_rel or '../' in file_rel:
+                  abort(400)
+              filepath = os.path.normpath(os.path.join(PROJECT_DIR, file_rel))
+              if not filepath.startswith(PROJECT_DIR):
+                  abort(403)
+              if not os.path.isfile(filepath):
+                  abort(404)
+              with open(filepath, 'r', errors='ignore') as f:
+                  content = f.read()
+              return f'''<!doctype html><html><head><meta charset="utf-8"><title>ویرایش {file_rel}</title></head>
+              <body><h3>ویرایش: {file_rel}</h3>
+              <form method="post" action="/save?file={file_rel}">
+              <textarea name="content" rows="30" cols="100">{content}</textarea><br>
+              <button type="submit">ذخیره</button>
+              </form><br><a href="/">بازگشت</a></body></html>'''
+
+          @app.route('/save', methods=['POST'])
+          def save():
+              file_rel = request.args.get('file', '')
+              if not file_rel or '../' in file_rel:
+                  abort(400)
+              filepath = os.path.normpath(os.path.join(PROJECT_DIR, file_rel))
+              if not filepath.startswith(PROJECT_DIR):
+                  abort(403)
+              content = request.form['content']
+              with open(filepath, 'w') as f:
+                  f.write(content)
+              return redirect(url_for('index'))
+
+          @app.route('/build')
+          def build():
+              try:
+                  result = subprocess.run(
+                      ['flutter', 'build', 'apk', '--target-platform', 'android-arm64'],
+                      cwd=PROJECT_DIR,
+                      capture_output=True,
+                      text=True,
+                      timeout=600
+                  )
+                  if result.returncode == 0:
+                      apk_path = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
+                      if os.path.exists(apk_path):
+                          return '<h3>ساخت موفق بود!</h3><a href="/download-apk">دانلود APK</a><br><a href="/">بازگشت</a>'
+                      else:
+                          return '<h3>ساخت موفق اما APK یافت نشد.</h3>'
+                  else:
+                      return f'<h3>ساخت ناموفق:</h3><pre>{result.stderr}</pre>'
+              except subprocess.TimeoutExpired:
+                  return '<h3>زمان ساخت به پایان رسید.</h3>'
+
+          @app.route('/download-apk')
+          def download_apk():
+              apk_path = os.path.join(PROJECT_DIR, 'build/app/outputs/flutter-apk/app-release.apk')
+              if os.path.exists(apk_path):
+                  return send_file(apk_path, as_attachment=True, download_name='app-release.apk')
+              else:
+                  return 'APK وجود ندارد. ابتدا build کنید.', 404
+
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000, debug=False)
+          PYEOF
+
+      - name: راه‌اندازی وب سرور
+        run: |
+          export WEB_USERNAME="${{ secrets.RDP_USERNAME }}"
+          export WEB_PASSWORD="${{ secrets.RDP_PASSWORD }}"
+          nohup python3 web_editor.py > web_server.log 2>&1 &
+          echo "وب سرور روی پورت 5000 آغاز به کار کرد"
+
+      - name: دریافت و راه‌اندازی bore برای تونل
+        run: |
+          wget -q https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
+          tar xzf bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
+          chmod +x bore
+          nohup ./bore local 5000 --to bore.pub > bore.log 2>&1 &
+          sleep 5
+          BORE_URL=$(grep -oP 'listening at \K[^ ]+' bore.log)
+          if [ -z "$BORE_URL" ]; then
+            echo "خطا: bore راه‌اندازی نشد"
+            cat bore.log
             exit 1
-          }
+          fi
+          echo "BORE_URL=$BORE_URL" >> $GITHUB_ENV
+          echo "آدرس عمومی: http://$BORE_URL"
 
-          Get-Service TermService | Start-Service
-
-      - name: Create bore runner script
-        shell: powershell
+      - name: به‌روزرسانی README.md
         run: |
-          # ساخت فایل bore_runner.ps1 بدون استفاده از here-string
-          $lines = @(
-            '$outLog = "bore_out.log"',
-            '$errLog = "bore_err.log"',
-            '$tunnelHost = "bore.pub"',
-            '',
-            'function Start-Bore {',
-            '  Start-Process -NoNewWindow -FilePath ".\bore.exe" -ArgumentList "local","3389","--to","bore.pub" -RedirectStandardOutput $outLog -RedirectStandardError $errLog',
-            '  Start-Sleep -Seconds 8',
-            '  $raw = Get-Content $outLog -Raw -ErrorAction SilentlyContinue',
-            '  $clean = $raw -replace "\x1b\[[0-9;]*m", ""',
-            '  if ($clean -match "listening at [\w\.]+:(\d+)") {',
-            '    $port = $matches[1]',
-            '    $connectionInfo = "host=$tunnelHost`nport=$port"',
-            '    $connectionInfo | Out-File -FilePath connection.txt -Encoding utf8',
-            '    Write-Host "Tunnel established on port $port"',
-            '    return $port',
-            '  }',
-            '  return $null',
-            '}',
-            '',
-            '# Keep-alive probe every 30s',
-            'Start-Job -ScriptBlock {',
-            '  while ($true) {',
-            '    try { $tcp = New-Object Net.Sockets.TcpClient; $tcp.Connect("127.0.0.1", 3389); $tcp.Close() } catch { }',
-            '    Start-Sleep -Seconds 30',
-            '  }',
-            '} | Out-Null',
-            '',
-            '# Start bore for the first time',
-            '$currentPort = Start-Bore',
-            'if (-not $currentPort) {',
-            '  Write-Host "ERROR: Could not start bore."',
-            '  exit 1',
-            '}',
-            '',
-            '# Monitor loop',
-            'while ($true) {',
-            '  Start-Sleep -Seconds 30',
-            '  $boreProc = Get-Process -Name "bore" -ErrorAction SilentlyContinue',
-            '  if (-not $boreProc) {',
-            '    Write-Host "Bore stopped. Restarting..."',
-            '    $currentPort = Start-Bore',
-            '  }',
-            '}'
-          )
-          $lines | Out-File -FilePath bore_runner.ps1 -Encoding utf8
-          Write-Host "bore_runner.ps1 created."
+          WEB_URL="http://${{ env.BORE_URL }}"
+          USERNAME="${{ secrets.RDP_USERNAME }}"
+          EXPIRY=$(date -u -d "${{ github.event.inputs.session_minutes }} minutes" +"%Y-%m-%d %H:%M:%S UTC")
+          NEW_SECTION="## 🚀 ویرایشگر آنلاین فلاتر\r\n"
+          NEW_SECTION+="**آدرس:** \`$WEB_URL\`  \r\n"
+          NEW_SECTION+="**نام کاربری:** \`$USERNAME\`  \r\n"
+          NEW_SECTION+="**رمز عبور:** (در Secrets مخزن ذخیره شده)  \r\n"
+          NEW_SECTION+="**انقضا:** $EXPIRY  \r\n"
 
-      - name: Start bore tunnel (detached)
-        shell: powershell
+          if [ ! -f README.md ]; then
+            echo -e "$NEW_SECTION" > README.md
+          else
+            if grep -q '## 🚀 ویرایشگر آنلاین فلاتر' README.md; then
+              sed -i '/## 🚀 ویرایشگر آنلاین فلاتر/,$d' README.md
+            fi
+            echo -e "\n$NEW_SECTION" >> README.md
+          fi
+          echo "README.md به روز شد."
+
+      - name: زنده نگه‌داشتن نشست
         run: |
-          # اجرا به عنوان یک فرآیند جداگانه که بعد از پایان این مرحله هم زنده بماند
-          Start-Process -FilePath "powershell.exe" -ArgumentList "-File", "bore_runner.ps1" -WindowStyle Hidden
-          Write-Host "Bore runner started in background."
+          DURATION=${{ github.event.inputs.session_minutes }}
+          END_TIME=$(date -d "$DURATION minutes" +%s)
+          echo "نشست به مدت $DURATION دقیقه فعال خواهد ماند"
+          while [ $(date +%s) -lt $END_TIME ]; do
+            REMAINING=$((END_TIME - $(date +%s)))
+            echo "زمان باقی‌مانده: $((REMAINING/60)) دقیقه $((REMAINING%60)) ثانیه"
+            sleep 60
+          done
+          echo "زمان به پایان رسید."
 
-          # صبر می‌کنیم تا فایل connection.txt ساخته شود
-          Write-Host "Waiting for tunnel to be ready..."
-          for ($i=0; $i -lt 30; $i++) {
-            if (Test-Path "connection.txt") { break }
-            Start-Sleep -Seconds 1
-          }
-          if (Test-Path "connection.txt") {
-            Write-Host "Tunnel is ready."
-          } else {
-            Write-Host "WARNING: Tunnel may not have started. Will try to continue."
-          }
-
-      - name: Update README.md
-        shell: powershell
-        run: |
-          if (-not (Test-Path "connection.txt")) {
-            Write-Host "ERROR: connection.txt not found."
-            exit 1
-          }
-
-          $details = Get-Content connection.txt -Raw | ConvertFrom-StringData
-          $connectionString = "$($details.host):$($details.port)"
-
-          $username = "${{ secrets.RDP_USERNAME }}"
-          $expiry = (Get-Date).AddMinutes(${{ github.event.inputs.session_minutes }}).ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'
-
-          # ساخت محتوای جدید README بدون here-string
-          $newSection = "## Windows RDP Access`r`n"
-          $newSection += "**Connection Address:** ``$connectionString``  `r`n"
-          $newSection += "**Username:** ``$username``  `r`n"
-          $newSection += "**Password:** (stored in GitHub Secrets)  `r`n"
-          $newSection += "**Expires:** $expiry  `r`n"
-
-          if (-not (Test-Path "README.md")) {
-            $readmeContent = $newSection
-          } else {
-            $readmeContent = Get-Content "README.md" -Raw -ErrorAction SilentlyContinue
-            if ($readmeContent -match '## Windows RDP Access') {
-              $readmeContent = $readmeContent -replace '(?s)## Windows RDP Access.*', $newSection
-            } else {
-              $readmeContent += "`r`n$newSection"
-            }
-          }
-
-          $readmeContent | Out-File -FilePath "README.md" -Encoding utf8
-          Write-Host "README.md updated."
-
-      - name: Commit and push README.md
-        shell: powershell
+      - name: کامیت تغییرات نهایی
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "Update RDP access info [skip ci]" --allow-empty
+          git add flutter_app/ README.md
+          git commit -m "ذخیره پروژه فلاتر و به‌روزرسانی README" || echo "تغییری برای کامیت وجود ندارد"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Display connection info
-        shell: powershell
-        run: |
-          $details = Get-Content connection.txt -Raw | ConvertFrom-StringData
-          Write-Host ""
-          Write-Host "======================================================"
-          Write-Host "  WINDOWS RDP READY FOR ANDROID"
-          Write-Host "======================================================"
-          Write-Host "  Host: $($details.host)"
-          Write-Host "  Port: $($details.port)"
-          Write-Host "  Username: ${{ secrets.RDP_USERNAME }}"
-          Write-Host "  Password: (your secret)"
-          Write-Host "======================================================"
-          Write-Host ""
-          Write-Host "In Microsoft Remote Desktop on Android:"
-          Write-Host "  PC Name: $($details.host):$($details.port)"
-          Write-Host "  User Name: ${{ secrets.RDP_USERNAME }}"
-          Write-Host ""
-          Write-Host "This info is also in README.md at the root of the repo."
-
-      - name: Keep session alive
-        shell: powershell
-        run: |
-          $duration = [int]${{ github.event.inputs.session_minutes }}
-          $endTime = (Get-Date).AddMinutes($duration)
-
-          Write-Host "Session will stay active for $duration minutes."
-          while ((Get-Date) -lt $endTime) {
-            $remaining = ($endTime - (Get-Date)).ToString("hh\:mm\:ss")
-            Write-Host "Remaining $remaining | $(Get-Date -Format 'HH:mm:ss')"
-            Start-Sleep -Seconds 60
-          }
-          Write-Host "Time is up."
