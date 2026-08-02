@@ -23,6 +23,9 @@ import 'package:crystal_navigation_bar/crystal_navigation_bar.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 part 'main.g.dart';
 
@@ -45,7 +48,6 @@ String formatDoubleWithoutTrailingZeros(double value) {
   }
 }
 
-/// فرمت عدد با جداکننده هزارگان به صورت انگلیسی (برای ورودی)
 String formatWithSeparator(double value) {
   if (value == 0) return '';
   return NumberFormat('#,###').format(value);
@@ -82,14 +84,12 @@ String goldTypeName(String k) {
   }
 }
 
-/// تبدیل عدد به تومان (برای نمایش زیر ورودی)
 String formatToman(double amount) {
   final toman = amount / 10;
   final formatted = NumberFormat('#,###').format(toman);
   return '${formatted.toPersianDigit()} تومان';
 }
 
-/// تبدیل عدد به حروف تومان
 String numberToTomanWords(double amount) {
   final toman = amount / 10;
   final intValue = toman.round();
@@ -97,7 +97,6 @@ String numberToTomanWords(double amount) {
   return words.toPersianDigit() + ' تومان';
 }
 
-/// ویجت ورودی عدد با جداکننده هزارگان، چپ‌چین و نمایش تومان برای قیمت‌ها
 class NumberInputWithToman extends StatefulWidget {
   final String label;
   final String? initialValue;
@@ -205,7 +204,6 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
   }
 }
 
-/// فرمتر برای جدا کردن هزارگان هنگام تایپ
 class ThousandsSeparatorInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
@@ -383,7 +381,6 @@ class ApiService {
           if (cd != null) { cVal = cd['value']; cPct = cd['percent']; }
         }
 
-        // تبدیل قیمت‌ها به ریال (به جز انس طلا که دلار است)
         const rialsMultiplier = 10.0;
         if (key != 'gold_ons') {
           cur = cur != null ? cur * rialsMultiplier : null;
@@ -510,20 +507,20 @@ class SettingsProvider extends ChangeNotifier {
   }
 }
 
-/// BasePriceProvider با قیمت‌های ثابت ۱۴۰۵/۱/۱
+/// BasePriceProvider با قیمت‌های اصلاح شده
 class BasePriceProvider extends ChangeNotifier {
   Map<String, double> _basePrices = {};
   BasePriceProvider() {
     _basePrices = {
-      'gold_18': 183065000,
-      'gold_24': 244060000,
-      'gold_ons': 46850000, // دلار
-      'gold_mazneh': 793000000,
-      'coin_old': 1815000000,
-      'coin_new': 1855000000,
-      'coin_half': 985000000,
-      'coin_quarter': 560000000,
-      'coin_1g': 280000000,
+      'gold_18': 201226000,      // ۲۰۱ میلیون و ۲۲۶ هزار
+      'gold_24': 0,
+      'gold_ons': 0,
+      'gold_mazneh': 0,
+      'coin_old': 0,
+      'coin_new': 2089850000,    // ۲ میلیارد و ۸۹ میلیون و ۸۵۰ هزار
+      'coin_half': 1081900000,   // ۱ میلیارد و ۸۱ میلیون و ۹۰۰ هزار
+      'coin_quarter': 595200000, // ۵۹۵ میلیون و ۲۰۰ هزار
+      'coin_1g': 0,
     };
   }
   Map<String, double> get basePrices => UnmodifiableMapView(_basePrices);
@@ -574,12 +571,13 @@ class DataProvider extends ChangeNotifier {
 
   Future<void> sellGold(GoldTransaction lot, double quantity, double pricePerUnit) async {
     if (quantity <= 0 || quantity > lot.remainingQuantity) return;
-    lot.remainingQuantity -= quantity;
-    await saleBox.add(SaleTransaction(
+    final sale = SaleTransaction(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       lotId: lot.id, saleDate: DateTime.now(),
       salePricePerUnit: pricePerUnit, quantity: quantity, isGold: true,
-    ));
+    );
+    lot.remainingQuantity -= quantity;
+    await saleBox.add(sale);
     if (lot.remainingQuantity <= 0.0001) await lot.delete();
     else await lot.save();
     notifyListeners();
@@ -587,12 +585,13 @@ class DataProvider extends ChangeNotifier {
 
   Future<void> sellCoin(CoinTransaction lot, int count, double pricePerUnit) async {
     if (count <= 0 || count > lot.remainingCount) return;
-    lot.remainingCount -= count;
-    await saleBox.add(SaleTransaction(
+    final sale = SaleTransaction(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       lotId: lot.id, saleDate: DateTime.now(),
       salePricePerUnit: pricePerUnit, quantity: count.toDouble(), isGold: false, coinType: lot.coinType,
-    ));
+    );
+    lot.remainingCount -= count;
+    await saleBox.add(sale);
     if (lot.remainingCount == 0) await lot.delete();
     else await lot.save();
     notifyListeners();
@@ -614,7 +613,19 @@ class DataProvider extends ChangeNotifier {
     return profit;
   }
 
-  // Export: تمام داده‌ها را به صورت JSON برمی‌گرداند
+  // محاسبه سود هر فروش
+  double getSaleProfit(SaleTransaction sale) {
+    double purchasePrice = 0;
+    if (sale.isGold) {
+      final lot = goldBox.get(sale.lotId);
+      if (lot != null) purchasePrice = lot.purchasePricePerUnit;
+    } else {
+      final lot = coinBox.get(sale.lotId);
+      if (lot != null) purchasePrice = lot.purchasePricePerUnit;
+    }
+    return (sale.salePricePerUnit - purchasePrice) * sale.quantity;
+  }
+
   Future<Map<String, dynamic>> exportAllData() async {
     final goldData = goldBox.values.map((g) => {
       'id': g.id,
@@ -651,7 +662,6 @@ class DataProvider extends ChangeNotifier {
     };
   }
 
-  // Import: پاک کردن داده‌های فعلی و جایگزینی با داده‌های جدید
   Future<void> importData(Map<String, dynamic> data) async {
     await goldBox.clear();
     await coinBox.clear();
@@ -757,7 +767,6 @@ class HomeScreen extends StatelessWidget {
     }
 
     final totalAssets = totalGoldValue + totalCoinValue;
-    final unrealizedProfit = totalAssets - (totalGoldCost + totalCoinCost);
     final realizedProfit = dataProvider.totalRealizedProfit;
 
     double base1405Cost = 0;
@@ -777,12 +786,17 @@ class HomeScreen extends StatelessWidget {
       realized1404 += ((basePrices[c.coinType] ?? 0) - c.purchasePricePerUnit) * c.count;
     }
 
+    // حذف قیمت سکه یک گرمی از لیست
+    final priceEntries = priceProvider.prices.entries
+        .where((e) => e.key != 'coin_1g')
+        .toList();
+
     return Scaffold(
       appBar: GlassAppBar(title: 'خلاصه دارایی'),
       body: RefreshIndicator(
         onRefresh: priceProvider.fetchPrices,
         child: ListView(
-          padding: EdgeInsets.only(bottom: 100, left: 16, right: 16, top: 16),
+          padding: EdgeInsets.only(bottom: 150, left: 16, right: 16, top: 16),
           children: [
             Card(
               child: Padding(padding: EdgeInsets.all(16), child: Column(children: [
@@ -790,7 +804,8 @@ class HomeScreen extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodySmall),
                 SizedBox(height: 16),
                 _summaryRow('ارزش کل دارایی', formatRial(totalAssets), Colors.green),
-                _summaryRow('سود محقق‌نشده', formatRial(unrealizedProfit), unrealizedProfit >= 0 ? Colors.green : Colors.red),
+                _summaryRow('ارزش طلای آب شده', formatRial(totalGoldValue), Colors.blue),
+                _summaryRow('ارزش سکه‌ها', formatRial(totalCoinValue), Colors.purple),
                 _summaryRow('سود محقق‌شده (فروش‌ها)', formatRial(realizedProfit), realizedProfit >= 0 ? Colors.green : Colors.red),
               ])),
             ),
@@ -814,7 +829,7 @@ class HomeScreen extends StatelessWidget {
             Text('قیمت‌های لحظه‌ای (ریال)', style: Theme.of(context).textTheme.titleMedium),
             GridView.count(
               shrinkWrap: true, physics: NeverScrollableScrollPhysics(), crossAxisCount: 2, childAspectRatio: 2.5,
-              children: priceProvider.prices.entries.map((e) {
+              children: priceEntries.map((e) {
                 final price = e.value.currentPrice ?? 0;
                 return Card(
                   child: Directionality(
@@ -827,7 +842,7 @@ class HomeScreen extends StatelessWidget {
                 );
               }).toList(),
             ),
-            SizedBox(height: 80), // فضای اضافی برای جلوگیری از همپوشانی با منو
+            SizedBox(height: 80),
           ],
         ),
       ),
@@ -841,6 +856,246 @@ class HomeScreen extends StatelessWidget {
       AutoSizeText(value, style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 16), maxLines: 1),
     ]),
   );
+}
+
+// ======================== صفحه گزارش فروش ========================
+class ReportsScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final dataProvider = Provider.of<DataProvider>(context);
+    final goldBox = dataProvider.goldBox;
+    final coinBox = dataProvider.coinBox;
+    final saleBox = dataProvider.saleBox;
+
+    List<Map<String, dynamic>> reportItems = [];
+
+    // گزارش خریدهای طلا
+    for (var g in goldBox.values) {
+      final sale = saleBox.values.where((s) => s.lotId == g.id && s.isGold).firstOrNull;
+      if (sale != null) {
+        final profit = (sale.salePricePerUnit - g.purchasePricePerUnit) * sale.quantity;
+        reportItems.add({
+          'type': 'فروش طلا',
+          'id': g.id,
+          'purchaseDate': formatJalaliDate(g.purchaseDate),
+          'saleDate': formatJalaliDate(sale.saleDate),
+          'quantity': sale.quantity,
+          'purchasePrice': g.purchasePricePerUnit,
+          'salePrice': sale.salePricePerUnit,
+          'profit': profit,
+          'description': g.description,
+        });
+      }
+    }
+
+    // گزارش خریدهای سکه
+    for (var c in coinBox.values) {
+      final sale = saleBox.values.where((s) => s.lotId == c.id && !s.isGold).firstOrNull;
+      if (sale != null) {
+        final profit = (sale.salePricePerUnit - c.purchasePricePerUnit) * sale.quantity;
+        reportItems.add({
+          'type': 'فروش سکه ${coinName(c.coinType)}',
+          'id': c.id,
+          'purchaseDate': formatJalaliDate(c.purchaseDate),
+          'saleDate': formatJalaliDate(sale.saleDate),
+          'quantity': sale.quantity,
+          'purchasePrice': c.purchasePricePerUnit,
+          'salePrice': sale.salePricePerUnit,
+          'profit': profit,
+          'description': c.description,
+        });
+      }
+    }
+
+    // مرتب‌سازی بر اساس تاریخ فروش
+    reportItems.sort((a, b) => a['saleDate'].compareTo(b['saleDate']));
+
+    double totalProfit = reportItems.fold(0, (sum, item) => sum + (item['profit'] as double));
+
+    return Scaffold(
+      appBar: GlassAppBar(
+        title: 'گزارش خرید و فروش',
+        actions: [
+          IconButton(
+            icon: Icon(Icons.picture_as_pdf),
+            onPressed: () => _generatePDF(context, reportItems, totalProfit),
+          ),
+          IconButton(
+            icon: Icon(Icons.share),
+            onPressed: () => _shareReport(context, reportItems, totalProfit),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Card(
+            margin: EdgeInsets.all(8),
+            child: Padding(
+              padding: EdgeInsets.all(12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('جمع سود/زیان کل:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    formatRial(totalProfit),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: totalProfit >= 0 ? Colors.green : Colors.red,
+                      fontSize: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.only(bottom: 150),
+              children: reportItems.map((item) {
+                final profit = item['profit'] as double;
+                return Card(
+                  margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: ListTile(
+                    title: Text('${item['type']}'),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('تاریخ خرید: ${item['purchaseDate']}'),
+                        Text('تاریخ فروش: ${item['saleDate']}'),
+                        Text('مقدار: ${formatDoubleWithoutTrailingZeros(item['quantity'])}'),
+                        Text('قیمت خرید: ${formatRial(item['purchasePrice'])}'),
+                        Text('قیمت فروش: ${formatRial(item['salePrice'])}'),
+                        if (item['description'].isNotEmpty)
+                          Text('توضیحات: ${item['description']}'),
+                      ],
+                    ),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          formatRial(profit),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: profit >= 0 ? Colors.green : Colors.red,
+                            fontSize: 16,
+                          ),
+                        ),
+                        Text(
+                          profit >= 0 ? 'سود' : 'زیان',
+                          style: TextStyle(fontSize: 12, color: profit >= 0 ? Colors.green : Colors.red),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _generatePDF(BuildContext context, List<Map<String, dynamic>> items, double totalProfit) async {
+    try {
+      final pdf = pw.Document();
+      pdf.addPage(
+        pw.Page(
+          build: (pw.Context context) {
+            return pw.Column(
+              children: [
+                pw.Text('گزارش خرید و فروش', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 20),
+                pw.Table(
+                  border: pw.TableBorder.all(),
+                  children: [
+                    pw.TableRow(
+                      children: [
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('نوع', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('تاریخ خرید', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('تاریخ فروش', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('مقدار', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('سود/زیان', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                      ],
+                    ),
+                    ...items.map((item) {
+                      final profit = item['profit'] as double;
+                      return pw.TableRow(
+                        children: [
+                          pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text(item['type'])),
+                          pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text(item['purchaseDate'])),
+                          pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text(item['saleDate'])),
+                          pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text(formatDoubleWithoutTrailingZeros(item['quantity']))),
+                          pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text(
+                            formatRial(profit),
+                            style: pw.TextStyle(color: profit >= 0 ? PdfColors.green : PdfColors.red),
+                          )),
+                        ],
+                      );
+                    }),
+                    pw.TableRow(
+                      children: [
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text('جمع کل:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
+                        pw.Padding(padding: pw.EdgeInsets.all(8), child: pw.Text(
+                          formatRial(totalProfit),
+                          style: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: totalProfit >= 0 ? PdfColors.green : PdfColors.red),
+                        )),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      );
+      final bytes = await pdf.save();
+      final tempDir = await path_provider.getTemporaryDirectory();
+      final file = File('${tempDir.path}/report.pdf');
+      await file.writeAsBytes(bytes);
+      await Printing.sharePdf(bytes: bytes, filename: 'report.pdf');
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطا در ساخت PDF: $e')),
+      );
+    }
+  }
+
+  Future<void> _shareReport(BuildContext context, List<Map<String, dynamic>> items, double totalProfit) async {
+    try {
+      String report = 'گزارش خرید و فروش\n';
+      report += '=' * 50 + '\n\n';
+      for (var item in items) {
+        report += 'نوع: ${item['type']}\n';
+        report += 'تاریخ خرید: ${item['purchaseDate']}\n';
+        report += 'تاریخ فروش: ${item['saleDate']}\n';
+        report += 'مقدار: ${formatDoubleWithoutTrailingZeros(item['quantity'])}\n';
+        report += 'قیمت خرید: ${formatRial(item['purchasePrice'])}\n';
+        report += 'قیمت فروش: ${formatRial(item['salePrice'])}\n';
+        final profit = item['profit'] as double;
+        report += 'سود/زیان: ${formatRial(profit)}\n';
+        if (item['description'].isNotEmpty) {
+          report += 'توضیحات: ${item['description']}\n';
+        }
+        report += '-' * 30 + '\n';
+      }
+      report += '\nجمع سود/زیان کل: ${formatRial(totalProfit)}\n';
+      final tempDir = await path_provider.getTemporaryDirectory();
+      final file = File('${tempDir.path}/report.txt');
+      await file.writeAsString(report);
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'text/plain')],
+        text: 'گزارش خرید و فروش',
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطا در اشتراک‌گذاری: $e')),
+      );
+    }
+  }
 }
 
 class GoldListScreen extends StatelessWidget {
@@ -867,40 +1122,77 @@ class GoldListScreen extends StatelessWidget {
         ),
         Expanded(
           child: ListView(
-            padding: EdgeInsets.only(bottom: 200),
+            padding: EdgeInsets.only(bottom: 150),
             children: activeGold.map((g) {
               final cp = priceProvider.prices[g.type]?.currentPrice ?? 0;
               final paid = g.purchasePricePerUnit * g.remainingQuantity;
               final currentValue = cp * g.remainingQuantity;
               final profit = currentValue - paid;
+              // بررسی فروش‌های این لات
+              final sales = dataProvider.saleBox.values.where((s) => s.lotId == g.id && s.isGold).toList();
               return Directionality(
                 textDirection: TextDirection.rtl,
                 child: Card(
                   margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: ListTile(
-                    title: AutoSizeText('${formatDoubleWithoutTrailingZeros(g.remainingQuantity)} گرم'),
-                    subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      AutoSizeText('فی خرید: ${formatRial(g.purchasePricePerUnit)}', maxLines: 1),
-                      AutoSizeText('ارزش فعلی: ${formatRial(currentValue)}', maxLines: 1),
-                      AutoSizeText('سود خالص: ${formatRial(profit)}', style: TextStyle(color: profit >= 0 ? Colors.green : Colors.red)),
-                      if (g.description.isNotEmpty)
-                        AutoSizeText(
-                          g.description,
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
-                          maxLines: 2,
-                          minFontSize: 10,
+                  child: Column(
+                    children: [
+                      ListTile(
+                        title: AutoSizeText('${formatDoubleWithoutTrailingZeros(g.remainingQuantity)} گرم'),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            AutoSizeText('فی خرید: ${formatRial(g.purchasePricePerUnit)}', maxLines: 1),
+                            AutoSizeText('ارزش فعلی: ${formatRial(currentValue)}', maxLines: 1),
+                            AutoSizeText('سود خالص: ${formatRial(profit)}', style: TextStyle(color: profit >= 0 ? Colors.green : Colors.red)),
+                            if (g.description.isNotEmpty)
+                              AutoSizeText(
+                                g.description,
+                                style: TextStyle(fontSize: 12, color: Colors.grey),
+                                maxLines: 2,
+                                minFontSize: 10,
+                              ),
+                            // نمایش فروش‌های انجام شده
+                            if (sales.isNotEmpty) ...[
+                              SizedBox(height: 8),
+                              Text('فروش‌های انجام شده:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              ...sales.map((s) {
+                                final saleProfit = (s.salePricePerUnit - g.purchasePricePerUnit) * s.quantity;
+                                return Padding(
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '${formatDoubleWithoutTrailingZeros(s.quantity)} گرم در ${formatJalaliDate(s.saleDate)}',
+                                          style: TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                      Text(
+                                        formatRial(saleProfit),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: saleProfit >= 0 ? Colors.green : Colors.red,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                          ],
                         ),
-                    ]),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: Icon(Icons.attach_money, color: Colors.red), tooltip: 'فروش', onPressed: () => _showSellGoldDialog(context, g)),
-                      IconButton(icon: Icon(Icons.edit, size: 20), onPressed: () => _showAddEditGoldDialog(context, g)),
-                      IconButton(icon: Icon(Icons.delete, size: 20, color: Colors.red), onPressed: () {
-                        showDialog(context: context, builder: (ctx) => AlertDialog(title: Text('تأیید حذف'), content: Text('آیا از حذف این آیتم اطمینان دارید؟'), actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('لغو')),
-                          TextButton(onPressed: () { dataProvider.deleteGold(g); Navigator.pop(ctx); }, child: Text('حذف', style: TextStyle(color: Colors.red))),
-                        ]));
-                      }),
-                    ]),
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(icon: Icon(Icons.attach_money, color: Colors.red), tooltip: 'فروش', onPressed: () => _showSellGoldDialog(context, g)),
+                          IconButton(icon: Icon(Icons.edit, size: 20), onPressed: () => _showAddEditGoldDialog(context, g)),
+                          IconButton(icon: Icon(Icons.delete, size: 20, color: Colors.red), onPressed: () {
+                            showDialog(context: context, builder: (ctx) => AlertDialog(title: Text('تأیید حذف'), content: Text('آیا از حذف این آیتم اطمینان دارید؟'), actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx), child: Text('لغو')),
+                              TextButton(onPressed: () { dataProvider.deleteGold(g); Navigator.pop(ctx); }, child: Text('حذف', style: TextStyle(color: Colors.red))),
+                            ]));
+                          }),
+                        ]),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -1075,34 +1367,69 @@ class CoinListScreen extends StatelessWidget {
         Card(margin: EdgeInsets.symmetric(horizontal: 8), child: ListTile(title: Text('مجموع مبلغ پرداختی'), trailing: AutoSizeText(formatRial(totalPaid), style: TextStyle(fontWeight: FontWeight.bold)))),
         Expanded(
           child: ListView(
-            padding: EdgeInsets.only(bottom: 200),
+            padding: EdgeInsets.only(bottom: 150),
             children: activeCoins.map((c) {
               final cp = priceProvider.prices[c.coinType]?.currentPrice ?? 0;
               final paid = c.purchasePricePerUnit * c.remainingCount;
               final currentValue = cp * c.remainingCount;
               final profit = currentValue - paid;
+              final sales = dataProvider.saleBox.values.where((s) => s.lotId == c.id && !s.isGold).toList();
               return Directionality(
                 textDirection: TextDirection.rtl,
                 child: Card(
                   margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: ListTile(
-                    title: AutoSizeText('${c.remainingCount} ${coinName(c.coinType)}'),
-                    subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      AutoSizeText('فی خرید: ${formatRial(c.purchasePricePerUnit)}'),
-                      AutoSizeText('ارزش فعلی: ${formatRial(currentValue)}'),
-                      AutoSizeText('سود خالص: ${formatRial(profit)}', style: TextStyle(color: profit >= 0 ? Colors.green : Colors.red)),
-                      if (c.description.isNotEmpty) AutoSizeText(c.description, style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    ]),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: Icon(Icons.attach_money, color: Colors.red), tooltip: 'فروش', onPressed: () => _showSellCoinDialog(context, c)),
-                      IconButton(icon: Icon(Icons.edit, size: 20), onPressed: () => _showAddEditCoinDialog(context, c)),
-                      IconButton(icon: Icon(Icons.delete, size: 20, color: Colors.red), onPressed: () {
-                        showDialog(context: context, builder: (ctx) => AlertDialog(title: Text('تأیید حذف'), content: Text('آیا از حذف این آیتم اطمینان دارید؟'), actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('لغو')),
-                          TextButton(onPressed: () { dataProvider.deleteCoin(c); Navigator.pop(ctx); }, child: Text('حذف', style: TextStyle(color: Colors.red))),
-                        ]));
-                      }),
-                    ]),
+                  child: Column(
+                    children: [
+                      ListTile(
+                        title: AutoSizeText('${c.remainingCount} ${coinName(c.coinType)}'),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            AutoSizeText('فی خرید: ${formatRial(c.purchasePricePerUnit)}'),
+                            AutoSizeText('ارزش فعلی: ${formatRial(currentValue)}'),
+                            AutoSizeText('سود خالص: ${formatRial(profit)}', style: TextStyle(color: profit >= 0 ? Colors.green : Colors.red)),
+                            if (c.description.isNotEmpty) AutoSizeText(c.description, style: TextStyle(fontSize: 12, color: Colors.grey)),
+                            if (sales.isNotEmpty) ...[
+                              SizedBox(height: 8),
+                              Text('فروش‌های انجام شده:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              ...sales.map((s) {
+                                final saleProfit = (s.salePricePerUnit - c.purchasePricePerUnit) * s.quantity;
+                                return Padding(
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '${s.quantity.toInt()} عدد در ${formatJalaliDate(s.saleDate)}',
+                                          style: TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                      Text(
+                                        formatRial(saleProfit),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: saleProfit >= 0 ? Colors.green : Colors.red,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                          ],
+                        ),
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(icon: Icon(Icons.attach_money, color: Colors.red), tooltip: 'فروش', onPressed: () => _showSellCoinDialog(context, c)),
+                          IconButton(icon: Icon(Icons.edit, size: 20), onPressed: () => _showAddEditCoinDialog(context, c)),
+                          IconButton(icon: Icon(Icons.delete, size: 20, color: Colors.red), onPressed: () {
+                            showDialog(context: context, builder: (ctx) => AlertDialog(title: Text('تأیید حذف'), content: Text('آیا از حذف این آیتم اطمینان دارید؟'), actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx), child: Text('لغو')),
+                              TextButton(onPressed: () { dataProvider.deleteCoin(c); Navigator.pop(ctx); }, child: Text('حذف', style: TextStyle(color: Colors.red))),
+                            ]));
+                          }),
+                        ]),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -1282,7 +1609,9 @@ class ChartsScreen extends StatelessWidget {
     List<PieChartSectionData> sections = [];
     if (goldValue > 0) sections.add(PieChartSectionData(value: goldValue, title: '${(goldValue/total*100).toStringAsFixed(1)}%', color: Colors.blue, radius: 50, titleStyle: TextStyle(fontSize: 10, color: Colors.white)));
     for (var e in coinTypeValues.entries) {
-      sections.add(PieChartSectionData(value: e.value, title: '${coinName(e.key)}\n${(e.value/total*100).toStringAsFixed(1)}%', color: _coinColor(e.key), radius: 50, titleStyle: TextStyle(fontSize: 9, color: Colors.white)));
+      if (e.value > 0) {
+        sections.add(PieChartSectionData(value: e.value, title: '${coinName(e.key)}\n${(e.value/total*100).toStringAsFixed(1)}%', color: _coinColor(e.key), radius: 50, titleStyle: TextStyle(fontSize: 9, color: Colors.white)));
+      }
     }
 
     List<BarChartGroupData> bars = [];
@@ -1313,7 +1642,7 @@ class ChartsScreen extends StatelessWidget {
     return Scaffold(
       appBar: GlassAppBar(title: 'نمودارها'),
       body: ListView(
-        padding: EdgeInsets.only(bottom: 100, left: 16, right: 16, top: 16),
+        padding: EdgeInsets.only(bottom: 150, left: 16, right: 16, top: 16),
         children: [
           Text('توزیع دارایی', style: Theme.of(context).textTheme.titleMedium),
           SizedBox(height: 10),
@@ -1378,9 +1707,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final secondaryColor = settings.secondaryColor;
 
     return Scaffold(
-      appBar: GlassAppBar(title: 'تنظیمات'),
+      appBar: GlassAppBar(
+        title: 'تنظیمات',
+        actions: [
+          IconButton(
+            icon: Icon(Icons.receipt_long),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => ReportsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: ListView(
-        padding: EdgeInsets.only(bottom: 100, left: 16, right: 16, top: 16),
+        padding: EdgeInsets.only(bottom: 150, left: 16, right: 16, top: 16),
         children: [
           Card(
             child: Padding(padding: EdgeInsets.all(16), child: Column(children: [
@@ -1466,8 +1808,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final tempDir = await path_provider.getTemporaryDirectory();
       final file = File('${tempDir.path}/gold_coin_backup.json');
       await file.writeAsString(jsonString);
-
-      // اشتراک‌گذاری فایل
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'application/json')],
         text: 'فایل پشتیبان مدیریت طلا و سکه',
@@ -1496,7 +1836,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final jsonString = await file.readAsString();
       final data = jsonDecode(jsonString) as Map<String, dynamic>;
 
-      // تأیید کاربر
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
