@@ -29,6 +29,8 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: '3.x'
+          cache: true
 
       - name: کش برای افزایش سرعت
         uses: actions/cache@v4
