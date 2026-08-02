@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 360
     container:
       image: cirrusci/flutter:latest
+    defaults:
+      run:
+        shell: bash       # ← همه‌ی گام‌ها با Bash اجرا شوند
 
     steps:
       - name: دریافت کد مخزن
@@ -53,8 +56,11 @@ jobs:
 
           app = Flask(__name__)
           PROJECT_DIR = os.path.join(os.getcwd(), 'flutter_app')
-          USERNAME = os.environ['WEB_USERNAME']
-          PASSWORD = os.environ['WEB_PASSWORD']
+          USERNAME = os.environ.get('WEB_USERNAME', '')
+          PASSWORD = os.environ.get('WEB_PASSWORD', '')
+
+          if not USERNAME or not PASSWORD:
+              raise RuntimeError("نام کاربری یا رمز عبور تنظیم نشده است!")
 
           def check_auth():
               auth = request.authorization
@@ -157,6 +163,12 @@ jobs:
 
       - name: راه‌اندازی وب سرور
         run: |
+          # بررسی وجود Secrets
+          if [ -z "${{ secrets.RDP_USERNAME }}" ] || [ -z "${{ secrets.RDP_PASSWORD }}" ]; then
+            echo "::error::لطفاً RDP_USERNAME و RDP_PASSWORD را در Secrets مخزن تعریف کنید."
+            exit 1
+          fi
+
           export WEB_USERNAME="${{ secrets.RDP_USERNAME }}"
           export WEB_PASSWORD="${{ secrets.RDP_PASSWORD }}"
           nohup python3 web_editor.py > web_server.log 2>&1 &
@@ -171,7 +183,7 @@ jobs:
           sleep 5
           BORE_URL=$(grep -oP 'listening at \K[^ ]+' bore.log)
           if [ -z "$BORE_URL" ]; then
-            echo "خطا: bore راه‌اندازی نشد"
+            echo "::error::bore راه‌اندازی نشد"
             cat bore.log
             exit 1
           fi
@@ -183,6 +195,7 @@ jobs:
           WEB_URL="http://${{ env.BORE_URL }}"
           USERNAME="${{ secrets.RDP_USERNAME }}"
           EXPIRY=$(date -u -d "${{ github.event.inputs.session_minutes }} minutes" +"%Y-%m-%d %H:%M:%S UTC")
+
           NEW_SECTION="## 🚀 ویرایشگر آنلاین فلاتر\r\n"
           NEW_SECTION+="**آدرس:** \`$WEB_URL\`  \r\n"
           NEW_SECTION+="**نام کاربری:** \`$USERNAME\`  \r\n"
@@ -190,12 +203,12 @@ jobs:
           NEW_SECTION+="**انقضا:** $EXPIRY  \r\n"
 
           if [ ! -f README.md ]; then
-            echo -e "$NEW_SECTION" > README.md
+            printf "%b" "$NEW_SECTION" > README.md
           else
             if grep -q '## 🚀 ویرایشگر آنلاین فلاتر' README.md; then
               sed -i '/## 🚀 ویرایشگر آنلاین فلاتر/,$d' README.md
             fi
-            echo -e "\n$NEW_SECTION" >> README.md
+            printf "\n%b" "$NEW_SECTION" >> README.md
           fi
           echo "README.md به روز شد."
 
