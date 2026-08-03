@@ -486,43 +486,40 @@ jobs:
           echo "🌐 در حال راه‌اندازی تونل Cloudflare..."
           ./cloudflared tunnel --url http://localhost:5000 --no-autoupdate > cloudflare.log 2>&1 &
           CLOUDFLARED_PID=$!
-          sleep 5
 
-          # چاپ کل لاگ برای دیباگ
-          echo "📋 محتوای لاگ cloudflared:"
-          cat cloudflare.log
-          echo "-----------------------------"
-
-          TUNNEL_URL=""
-          for i in $(seq 1 30); do
+          # صبر می‌کنیم تا URL در لاگ ظاهر شود
+          echo "⏳ منتظر ایجاد تونل..."
+          TIMEOUT=60
+          START_TIME=$(date +%s)
+          while true; do
             if ! kill -0 $CLOUDFLARED_PID 2>/dev/null; then
               echo "⛔ پروسه cloudflared از بین رفت"
-              break
+              cat cloudflare.log
+              exit 1
             fi
 
-            # تلاش برای استخراج URL با چندین الگوی رایج
-            if grep -q 'https://.*trycloudflare\.com' cloudflare.log; then
-              TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' cloudflare.log | head -n1)
-            elif grep -q 'https://.*\.trycloudflare\.com' cloudflare.log; then
-              TUNNEL_URL=$(grep -oP 'https://[^[:space:]]+\.trycloudflare\.com' cloudflare.log | head -n1)
-            elif grep -q 'https://.*\.cfargotunnel\.com' cloudflare.log; then
-              TUNNEL_URL=$(grep -oP 'https://[^[:space:]]+\.cfargotunnel\.com' cloudflare.log | head -n1)
+            # الگوی دقیق‌تر: خطی که شامل "tunneled with tls termination" یا "trycloudflare.com" باشد
+            if grep -q 'trycloudflare\.com' cloudflare.log; then
+              TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
+              if [ -n "$TUNNEL_URL" ]; then
+                echo "✅ آدرس تونل: $TUNNEL_URL"
+                break
+              fi
             fi
 
-            if [ -n "$TUNNEL_URL" ]; then
-              echo "✅ آدرس تونل: $TUNNEL_URL"
-              break
+            CURRENT_TIME=$(date +%s)
+            if [ $((CURRENT_TIME - START_TIME)) -ge $TIMEOUT ]; then
+              echo "❌ زمان انتظار به پایان رسید"
+              cat cloudflare.log
+              exit 1
             fi
 
             sleep 2
           done
 
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ دریافت آدرس تونل شکست خورد"
-            echo "محتوای کامل لاگ:"
-            cat cloudflare.log
-            exit 1
-          fi
+          # نمایش کل لاگ برای تأیید
+          echo "📋 محتوای کامل لاگ:"
+          cat cloudflare.log
 
           echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
 
