@@ -56,7 +56,7 @@ jobs:
             flutter create flutter_app
           fi
 
-      - name: نوشتن سرور API
+      - name: نوشتن سرور API (نسخه اصلاح‌شده)
         run: |
           cat << 'PYEOF' > api_server.py
           import os, subprocess, threading, time, json, shutil, zipfile, io
@@ -297,7 +297,11 @@ jobs:
                   return jsonify({"error": "فیلد command لازم است"}), 400
               cmd = data['command']
               timeout = data.get('timeout', 300)
-              working_dir = data.get('working_dir', PROJECT_DIR)
+              # اصلاح working_dir
+              working_dir = data.get('working_dir')
+              if not working_dir or not os.path.isdir(working_dir):
+                  working_dir = PROJECT_DIR
+
               try:
                   result = subprocess.run(
                       cmd, shell=True, cwd=working_dir,
@@ -320,7 +324,11 @@ jobs:
                   return jsonify({"error": "فیلد command لازم است"}), 400
               cmd = data['command']
               timeout = data.get('timeout', 300)
-              working_dir = data.get('working_dir', PROJECT_DIR)
+              # اصلاح working_dir
+              working_dir = data.get('working_dir')
+              if not working_dir or not os.path.isdir(working_dir):
+                  working_dir = PROJECT_DIR
+
               job_id = datetime.now().strftime('%Y%m%d%H%M%S%f')
               with cmd_lock:
                   running_commands[job_id] = {
