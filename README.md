@@ -1,1 +1,1 @@
-https://wall-friendship-exploring-offshore.trycloudflare.com
+https://templates-airlines-solo-liquid.trycloudflare.com
