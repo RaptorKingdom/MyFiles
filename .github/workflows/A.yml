@@ -1,4 +1,4 @@
-name: Flutter API Builder (Bore Tunnel)
+name: Flutter API Builder (HTTPS Tunnel)
 
 on:
   workflow_dispatch:
@@ -479,25 +479,32 @@ jobs:
           nohup python3 api_server.py > api_server.log 2>&1 &
           echo "سرور API روی پورت 5000 آغاز به کار کرد"
 
-      - name: دریافت و راه‌اندازی bore
+      - name: راه‌اندازی تونل HTTPS با localhost.run
         run: |
-          wget -q https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
-          tar xzf bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz
-          chmod +x bore
-          nohup ./bore local 5000 --to bore.pub > bore.log 2>&1 &
-          sleep 5
-          BORE_URL=$(grep -oP 'listening at \K[^ ]+' bore.log)
-          if [ -z "$BORE_URL" ]; then
-            echo "::error::bore راه‌اندازی نشد"
-            cat bore.log
+          # ایجاد کلید SSH یکبارمصرف برای تونل
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/tunnel_key -N "" -q
+          # اجرای تونل معکوس در پس‌زمینه (پورت ۵۰۰۰ داخلی → پورت ۸۰ عمومی با SSL)
+          nohup ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+            -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
+          # منتظر تولید لینک باش
+          for i in {1..15}; do
+            if grep -q "https://" tunnel.log; then
+              break
+            fi
+            sleep 2
+          done
+          TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.domains' tunnel.log | head -1)
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "::error::تونل راه‌اندازی نشد"
+            cat tunnel.log
             exit 1
           fi
-          echo "BORE_URL=$BORE_URL" >> $GITHUB_ENV
-          echo "آدرس عمومی: http://$BORE_URL"
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          echo "آدرس عمومی: $TUNNEL_URL"
 
       - name: به‌روزرسانی README (فقط لینک)
         run: |
-          WEB_URL="http://${{ env.BORE_URL }}"
+          WEB_URL="${{ env.TUNNEL_URL }}"
           echo "$WEB_URL" > README.md
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -507,7 +514,7 @@ jobs:
             git add README.md
             git commit -m "لینک API [skip ci]"
             git push
-            echo "README با لینک عمومی به‌روز شد."
+            echo "README با لینک HTTPS به‌روز شد."
           fi
 
       - name: زنده نگه‌داشتن نشست
