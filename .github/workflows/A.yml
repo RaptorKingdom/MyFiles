@@ -1,4 +1,4 @@
-name: Flutter API Builder (HTTPS Tunnel)
+name: Flutter API Builder (Cloudflare Tunnel)
 
 on:
   workflow_dispatch:
@@ -477,28 +477,61 @@ jobs:
           nohup python3 api_server.py > api_server.log 2>&1 &
           echo "سرور API روی پورت 5000 آغاز به کار کرد"
 
-      - name: راه‌اندازی تونل HTTPS با localhost.run
+      - name: راه‌اندازی تونل Cloudflare (و fallback)
         run: |
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/tunnel_key -N "" -q
-          nohup ssh -o StrictHostKeyChecking=no \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=3 \
-            -o ExitOnForwardFailure=yes \
-            -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
-          for i in {1..15}; do
-            if grep -q "tunneled with tls termination" tunnel.log; then
+          # دانلود cloudflared
+          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+
+          # تلاش برای trycloudflare.com
+          echo "🌐 در حال راه‌اندازی تونل Cloudflare..."
+          ./cloudflared tunnel --url http://localhost:5000 --no-autoupdate > cloudflare.log 2>&1 &
+          CLOUDFLARED_PID=$!
+          sleep 5
+
+          TUNNEL_URL=""
+          for i in $(seq 1 30); do
+            if ! kill -0 $CLOUDFLARED_PID 2>/dev/null; then
+              echo "⛔ پروسه cloudflared از بین رفت"
+              cat cloudflare.log
+              break
+            fi
+            if grep -q 'trycloudflare.com' cloudflare.log; then
+              TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' cloudflare.log | head -n1)
+              echo "✅ آدرس Cloudflare: $TUNNEL_URL"
               break
             fi
             sleep 2
           done
-          TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.(domains|life)' tunnel.log | head -1)
+
+          # fallback به localhost.run در صورت شکست
           if [ -z "$TUNNEL_URL" ]; then
-            echo "::error::تونل راه‌اندازی نشد"
-            cat tunnel.log
+            echo "⚠️ Cloudflare شکست خورد، استفاده از localhost.run..."
+            kill $CLOUDFLARED_PID 2>/dev/null || true
+            ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=10 -R 80:localhost:5000 nokey@localhost.run > lhr.log 2>&1 &
+            SSH_PID=$!
+            sleep 5
+            for i in $(seq 1 30); do
+              if ! kill -0 $SSH_PID 2>/dev/null; then
+                echo "⛔ SSH هم از بین رفت"
+                cat lhr.log
+                exit 1
+              fi
+              if grep -q 'https://' lhr.log; then
+                TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.lhr\.(domains|life)' lhr.log | head -n1)
+                echo "✅ آدرس localhost.run: $TUNNEL_URL"
+                break
+              fi
+              sleep 2
+            done
+          fi
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ هیچ تونلی در دسترس نیست"
             exit 1
           fi
+
           echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
-          echo "آدرس عمومی: $TUNNEL_URL"
 
       - name: به‌روزرسانی README (فقط لینک)
         run: |
@@ -515,53 +548,12 @@ jobs:
             echo "README با لینک HTTPS به‌روز شد."
           fi
 
-      - name: زنده نگه‌داشتن نشست و تونل
+      - name: زنده نگه‌داشتن نشست
         run: |
           DURATION=${{ github.event.inputs.session_minutes }}
-          END_TIME=$(date -d "$DURATION minutes" +%s)
-          TUNNEL_URL="${{ env.TUNNEL_URL }}"
-          echo "نشست به مدت $DURATION دقیقه فعال خواهد ماند"
-          while [ $(date +%s) -lt $END_TIME ]; do
-            REMAINING=$((END_TIME - $(date +%s)))
-            echo "زمان باقی‌مانده: $((REMAINING/60)) دقیقه $((REMAINING%60)) ثانیه"
-
-            # بررسی اینکه تونل از خارج قابل دسترس است
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$TUNNEL_URL/api/status")
-            if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "401" ]; then
-              echo "تونل از دسترس خارج شد (کد $HTTP_CODE)، در حال راه‌اندازی مجدد..."
-              pkill -f "ssh.*-R 80:localhost:5000" || true
-              nohup ssh -o StrictHostKeyChecking=no \
-                -o ServerAliveInterval=10 \
-                -o ServerAliveCountMax=3 \
-                -o ExitOnForwardFailure=yes \
-                -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
-              sleep 8
-              NEW_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.(domains|life)' tunnel.log | head -1)
-              if [ -n "$NEW_URL" ]; then
-                echo "آدرس جدید: $NEW_URL"
-                TUNNEL_URL=$NEW_URL
-                # اگر آدرس تغییر کرد، README را به‌روز کن
-                if [ "$NEW_URL" != "${{ env.TUNNEL_URL }}" ]; then
-                  echo "$NEW_URL" > README.md
-                  git config user.name "github-actions[bot]"
-                  git config user.email "github-actions[bot]@users.noreply.github.com"
-                  git add README.md
-                  git commit -m "به‌روزرسانی لینک تونل [skip ci]" || true
-                  git push || true
-                fi
-              else
-                echo "خطا در دریافت آدرس جدید"
-              fi
-            else
-              # یک درخواست اضافه برای جلوگیری از inactivity timeout
-              curl -s -o /dev/null "$TUNNEL_URL/api/status"
-            fi
-
-            sleep 30
-          done
+          echo "⏳ سرور برای $DURATION دقیقه فعال خواهد ماند"
+          sleep $((DURATION * 60))
           echo "زمان به پایان رسید."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: کامیت تغییرات پروژه فلاتر (ذخیره برای دفعات بعد)
         if: always()
