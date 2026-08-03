@@ -297,7 +297,6 @@ jobs:
                   return jsonify({"error": "فیلد command لازم است"}), 400
               cmd = data['command']
               timeout = data.get('timeout', 300)
-              # اصلاح working_dir
               working_dir = data.get('working_dir')
               if not working_dir or not os.path.isdir(working_dir):
                   working_dir = PROJECT_DIR
@@ -324,7 +323,6 @@ jobs:
                   return jsonify({"error": "فیلد command لازم است"}), 400
               cmd = data['command']
               timeout = data.get('timeout', 300)
-              # اصلاح working_dir
               working_dir = data.get('working_dir')
               if not working_dir or not os.path.isdir(working_dir):
                   working_dir = PROJECT_DIR
@@ -482,7 +480,10 @@ jobs:
       - name: راه‌اندازی تونل HTTPS با localhost.run
         run: |
           ssh-keygen -t rsa -b 4096 -f ~/.ssh/tunnel_key -N "" -q
-          nohup ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+          nohup ssh -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=3 \
+            -o ExitOnForwardFailure=yes \
             -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
           for i in {1..15}; do
             if grep -q "tunneled with tls termination" tunnel.log; then
@@ -514,17 +515,44 @@ jobs:
             echo "README با لینک HTTPS به‌روز شد."
           fi
 
-      - name: زنده نگه‌داشتن نشست
+      - name: زنده نگه‌داشتن نشست و تونل
         run: |
           DURATION=${{ github.event.inputs.session_minutes }}
           END_TIME=$(date -d "$DURATION minutes" +%s)
+          TUNNEL_URL="${{ env.TUNNEL_URL }}"
           echo "نشست به مدت $DURATION دقیقه فعال خواهد ماند"
           while [ $(date +%s) -lt $END_TIME ]; do
             REMAINING=$((END_TIME - $(date +%s)))
             echo "زمان باقی‌مانده: $((REMAINING/60)) دقیقه $((REMAINING%60)) ثانیه"
+
+            # بررسی سلامت تونل
+            if ! pgrep -f "ssh.*-R 80:localhost:5000" > /dev/null || ! curl -s --connect-timeout 2 http://localhost:5000/api/status > /dev/null; then
+              echo "تونل قطع شده، در حال راه‌اندازی مجدد..."
+              pkill -f "ssh.*-R 80:localhost:5000" || true
+              nohup ssh -o StrictHostKeyChecking=no \
+                -o ServerAliveInterval=10 \
+                -o ServerAliveCountMax=3 \
+                -o ExitOnForwardFailure=yes \
+                -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
+              sleep 5
+              NEW_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.(domains|life)' tunnel.log | head -1)
+              if [ -n "$NEW_URL" ] && [ "$NEW_URL" != "$TUNNEL_URL" ]; then
+                echo "آدرس جدید: $NEW_URL"
+                TUNNEL_URL=$NEW_URL
+                echo "$NEW_URL" > README.md
+                git config user.name "github-actions[bot]"
+                git config user.email "github-actions[bot]@users.noreply.github.com"
+                git add README.md
+                git commit -m "به‌روزرسانی لینک تونل [skip ci]" || true
+                git push || true
+              fi
+            fi
+
             sleep 60
           done
           echo "زمان به پایان رسید."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: کامیت تغییرات پروژه فلاتر (ذخیره برای دفعات بعد)
         if: always()
