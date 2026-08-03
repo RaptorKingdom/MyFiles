@@ -613,7 +613,6 @@ class DataProvider extends ChangeNotifier {
     return profit;
   }
 
-  // محاسبه سود هر فروش
   double getSaleProfit(SaleTransaction sale) {
     double purchasePrice = 0;
     if (sale.isGold) {
@@ -712,7 +711,7 @@ class DataProvider extends ChangeNotifier {
   }
 }
 
-// -------------------- ویجت AppBar بلوری --------------------
+// -------------------- ویجت AppBar بلوری با شفافیت بالا --------------------
 class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
   final List<Widget>? actions;
@@ -727,7 +726,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
         child: AppBar(
           title: Text(title),
           centerTitle: true,
-          backgroundColor: Colors.black.withOpacity(0.2),
+          backgroundColor: Colors.black.withOpacity(0.05),
           elevation: 0,
           actions: actions,
           systemOverlayStyle: SystemUiOverlayStyle.light,
@@ -1053,9 +1052,6 @@ class ReportsScreen extends StatelessWidget {
         ),
       );
       final bytes = await pdf.save();
-      final tempDir = await path_provider.getTemporaryDirectory();
-      final file = File('${tempDir.path}/report.pdf');
-      await file.writeAsBytes(bytes);
       await Printing.sharePdf(bytes: bytes, filename: 'report.pdf');
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1128,7 +1124,6 @@ class GoldListScreen extends StatelessWidget {
               final paid = g.purchasePricePerUnit * g.remainingQuantity;
               final currentValue = cp * g.remainingQuantity;
               final profit = currentValue - paid;
-              // بررسی فروش‌های این لات
               final sales = dataProvider.saleBox.values.where((s) => s.lotId == g.id && s.isGold).toList();
               return Directionality(
                 textDirection: TextDirection.rtl,
@@ -1151,7 +1146,6 @@ class GoldListScreen extends StatelessWidget {
                                 maxLines: 2,
                                 minFontSize: 10,
                               ),
-                            // نمایش فروش‌های انجام شده
                             if (sales.isNotEmpty) ...[
                               SizedBox(height: 8),
                               Text('فروش‌های انجام شده:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
