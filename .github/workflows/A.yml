@@ -477,57 +477,50 @@ jobs:
           nohup python3 api_server.py > api_server.log 2>&1 &
           echo "سرور API روی پورت 5000 آغاز به کار کرد"
 
-      - name: راه‌اندازی تونل Cloudflare (و fallback)
+      - name: راه‌اندازی تونل Cloudflare
         run: |
           # دانلود cloudflared
           curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
           chmod +x cloudflared
 
-          # تلاش برای trycloudflare.com
           echo "🌐 در حال راه‌اندازی تونل Cloudflare..."
           ./cloudflared tunnel --url http://localhost:5000 --no-autoupdate > cloudflare.log 2>&1 &
           CLOUDFLARED_PID=$!
           sleep 5
 
+          # چاپ کل لاگ برای دیباگ
+          echo "📋 محتوای لاگ cloudflared:"
+          cat cloudflare.log
+          echo "-----------------------------"
+
           TUNNEL_URL=""
           for i in $(seq 1 30); do
             if ! kill -0 $CLOUDFLARED_PID 2>/dev/null; then
               echo "⛔ پروسه cloudflared از بین رفت"
-              cat cloudflare.log
               break
             fi
-            if grep -q 'trycloudflare.com' cloudflare.log; then
+
+            # تلاش برای استخراج URL با چندین الگوی رایج
+            if grep -q 'https://.*trycloudflare\.com' cloudflare.log; then
               TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' cloudflare.log | head -n1)
-              echo "✅ آدرس Cloudflare: $TUNNEL_URL"
+            elif grep -q 'https://.*\.trycloudflare\.com' cloudflare.log; then
+              TUNNEL_URL=$(grep -oP 'https://[^[:space:]]+\.trycloudflare\.com' cloudflare.log | head -n1)
+            elif grep -q 'https://.*\.cfargotunnel\.com' cloudflare.log; then
+              TUNNEL_URL=$(grep -oP 'https://[^[:space:]]+\.cfargotunnel\.com' cloudflare.log | head -n1)
+            fi
+
+            if [ -n "$TUNNEL_URL" ]; then
+              echo "✅ آدرس تونل: $TUNNEL_URL"
               break
             fi
+
             sleep 2
           done
 
-          # fallback به localhost.run در صورت شکست
           if [ -z "$TUNNEL_URL" ]; then
-            echo "⚠️ Cloudflare شکست خورد، استفاده از localhost.run..."
-            kill $CLOUDFLARED_PID 2>/dev/null || true
-            ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=10 -R 80:localhost:5000 nokey@localhost.run > lhr.log 2>&1 &
-            SSH_PID=$!
-            sleep 5
-            for i in $(seq 1 30); do
-              if ! kill -0 $SSH_PID 2>/dev/null; then
-                echo "⛔ SSH هم از بین رفت"
-                cat lhr.log
-                exit 1
-              fi
-              if grep -q 'https://' lhr.log; then
-                TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.lhr\.(domains|life)' lhr.log | head -n1)
-                echo "✅ آدرس localhost.run: $TUNNEL_URL"
-                break
-              fi
-              sleep 2
-            done
-          fi
-
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ هیچ تونلی در دسترس نیست"
+            echo "❌ دریافت آدرس تونل شکست خورد"
+            echo "محتوای کامل لاگ:"
+            cat cloudflare.log
             exit 1
           fi
 
