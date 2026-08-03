@@ -1,1 +1,1 @@
-https://upgrade-animals-nobody-plant.trycloudflare.com
+https://function-institutes-priced-integer.trycloudflare.com
