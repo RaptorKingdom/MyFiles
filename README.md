@@ -1,1 +1,1 @@
-https://realized-blind-methodology-millions.trycloudflare.com
+https://wall-friendship-exploring-offshore.trycloudflare.com
