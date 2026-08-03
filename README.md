@@ -1,1 +1,1 @@
-https://templates-airlines-solo-liquid.trycloudflare.com
+https://upgrade-animals-nobody-plant.trycloudflare.com
