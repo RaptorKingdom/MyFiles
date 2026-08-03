@@ -128,13 +128,15 @@ class SaleTransactionAdapter extends TypeAdapter<SaleTransaction> {
       quantity: fields[4] as double,
       isGold: fields[5] as bool,
       coinType: fields[6] as String?,
+      purchasePricePerUnit: fields[7] as double,
+      purchaseDate: fields[8] as DateTime,
     );
   }
 
   @override
   void write(BinaryWriter writer, SaleTransaction obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(9)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -148,7 +150,11 @@ class SaleTransactionAdapter extends TypeAdapter<SaleTransaction> {
       ..writeByte(5)
       ..write(obj.isGold)
       ..writeByte(6)
-      ..write(obj.coinType);
+      ..write(obj.coinType)
+      ..writeByte(7)
+      ..write(obj.purchasePricePerUnit)
+      ..writeByte(8)
+      ..write(obj.purchaseDate);
   }
 
   @override
