@@ -525,30 +525,39 @@ jobs:
             REMAINING=$((END_TIME - $(date +%s)))
             echo "زمان باقی‌مانده: $((REMAINING/60)) دقیقه $((REMAINING%60)) ثانیه"
 
-            # بررسی سلامت تونل
-            if ! pgrep -f "ssh.*-R 80:localhost:5000" > /dev/null || ! curl -s --connect-timeout 2 http://localhost:5000/api/status > /dev/null; then
-              echo "تونل قطع شده، در حال راه‌اندازی مجدد..."
+            # بررسی اینکه تونل از خارج قابل دسترس است
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$TUNNEL_URL/api/status")
+            if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "401" ]; then
+              echo "تونل از دسترس خارج شد (کد $HTTP_CODE)، در حال راه‌اندازی مجدد..."
               pkill -f "ssh.*-R 80:localhost:5000" || true
               nohup ssh -o StrictHostKeyChecking=no \
                 -o ServerAliveInterval=10 \
                 -o ServerAliveCountMax=3 \
                 -o ExitOnForwardFailure=yes \
                 -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
-              sleep 5
+              sleep 8
               NEW_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.(domains|life)' tunnel.log | head -1)
-              if [ -n "$NEW_URL" ] && [ "$NEW_URL" != "$TUNNEL_URL" ]; then
+              if [ -n "$NEW_URL" ]; then
                 echo "آدرس جدید: $NEW_URL"
                 TUNNEL_URL=$NEW_URL
-                echo "$NEW_URL" > README.md
-                git config user.name "github-actions[bot]"
-                git config user.email "github-actions[bot]@users.noreply.github.com"
-                git add README.md
-                git commit -m "به‌روزرسانی لینک تونل [skip ci]" || true
-                git push || true
+                # اگر آدرس تغییر کرد، README را به‌روز کن
+                if [ "$NEW_URL" != "${{ env.TUNNEL_URL }}" ]; then
+                  echo "$NEW_URL" > README.md
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add README.md
+                  git commit -m "به‌روزرسانی لینک تونل [skip ci]" || true
+                  git push || true
+                fi
+              else
+                echo "خطا در دریافت آدرس جدید"
               fi
+            else
+              # یک درخواست اضافه برای جلوگیری از inactivity timeout
+              curl -s -o /dev/null "$TUNNEL_URL/api/status"
             fi
 
-            sleep 60
+            sleep 30
           done
           echo "زمان به پایان رسید."
         env:
