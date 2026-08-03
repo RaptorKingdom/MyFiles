@@ -1,1 +1,1 @@
-https://patio-genes-ranger-champion.trycloudflare.com
+https://realized-blind-methodology-millions.trycloudflare.com
