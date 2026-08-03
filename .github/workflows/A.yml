@@ -481,19 +481,16 @@ jobs:
 
       - name: راه‌اندازی تونل HTTPS با localhost.run
         run: |
-          # ایجاد کلید SSH یکبارمصرف برای تونل
           ssh-keygen -t rsa -b 4096 -f ~/.ssh/tunnel_key -N "" -q
-          # اجرای تونل معکوس در پس‌زمینه (پورت ۵۰۰۰ داخلی → پورت ۸۰ عمومی با SSL)
           nohup ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
             -i ~/.ssh/tunnel_key -R 80:localhost:5000 localhost.run > tunnel.log 2>&1 &
-          # منتظر تولید لینک باش
           for i in {1..15}; do
-            if grep -q "https://" tunnel.log; then
+            if grep -q "tunneled with tls termination" tunnel.log; then
               break
             fi
             sleep 2
           done
-          TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.domains' tunnel.log | head -1)
+          TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.lhr\.(domains|life)' tunnel.log | head -1)
           if [ -z "$TUNNEL_URL" ]; then
             echo "::error::تونل راه‌اندازی نشد"
             cat tunnel.log
