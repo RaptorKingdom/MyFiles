@@ -1,7 +1,7 @@
 name: Forever Bot
 
 on:
-  workflow_dispatch:          # فقط با دستور یا توسط trigger.yml اجرا می‌شود
+  workflow_dispatch:
 
 concurrency:
   group: forever-bot
@@ -41,6 +41,7 @@ jobs:
           import time
           import threading
           import logging
+          import traceback
           from datetime import datetime, timedelta
           from pathlib import Path
           from telegram import Update
@@ -76,65 +77,87 @@ jobs:
                       del file_expiry[f]
                   time.sleep(60)
 
+          async def send_error(update: Update, error_text: str):
+              """ارسال خطا به کاربر با تقسیم اگر طولانی باشد"""
+              if len(error_text) > 4000:
+                  for i in range(0, len(error_text), 4000):
+                      await update.message.reply_text(error_text[i:i+4000])
+              else:
+                  await update.message.reply_text(error_text)
+
           async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-              user = update.effective_user
-              if user.username != ALLOWED_USERNAME:
-                  await update.message.reply_text("⛔ شما مجاز به استفاده از این ربات نیستید.")
-                  return
-              await update.message.reply_text(
-                  "👋 سلام! فایل، عکس یا ویدیو بفرستید تا لینک دریافت کنید.\n"
-                  f"⏳ هر لینک به مدت {EXPIRY_DURATION.seconds//3600} ساعت معتبر است."
-              )
+              try:
+                  user = update.effective_user
+                  if user.username != ALLOWED_USERNAME:
+                      await update.message.reply_text("⛔ شما مجاز به استفاده از این ربات نیستید.")
+                      return
+                  await update.message.reply_text(
+                      "👋 سلام! فایل، عکس یا ویدیو بفرستید تا لینک دریافت کنید.\n"
+                      f"⏳ هر لینک به مدت {EXPIRY_DURATION.seconds//3600} ساعت معتبر است."
+                  )
+              except Exception as e:
+                  tb = traceback.format_exc()
+                  await send_error(update, f"❌ خطا در start:\n\n{str(e)}\n\n{tb}")
 
           async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-              user = update.effective_user
-              if user.username != ALLOWED_USERNAME:
-                  await update.message.reply_text("⛔ شما مجاز به استفاده از این ربات نیستید.")
-                  return
-
-              base_url = get_tunnel_url()
-              if not base_url:
-                  await update.message.reply_text("❌ سرویس دهی موقتاً در دسترس نیست. لحظاتی بعد تلاش کنید.")
-                  return
-
-              doc = update.message.document
-              photo = update.message.photo
-              video = update.message.video
-              if doc:
-                  file_obj = doc
-                  ext = os.path.splitext(doc.file_name or '')[1] if doc.file_name else '.bin'
-                  fname = f"{int(time.time())}_{doc.file_unique_id}{ext}"
-              elif photo:
-                  file_obj = photo[-1]
-                  fname = f"{int(time.time())}_{file_obj.file_unique_id}.jpg"
-              elif video:
-                  file_obj = video
-                  fname = f"{int(time.time())}_{file_obj.file_unique_id}.mp4"
-              else:
-                  await update.message.reply_text("❌ فقط فایل، عکس و ویدیو پشتیبانی می‌شود.")
-                  return
-
-              file_path = UPLOAD_DIR / fname
-
               try:
-                  new_file = await file_obj.get_file()
-                  await new_file.download_to_drive(file_path)
+                  user = update.effective_user
+                  if user.username != ALLOWED_USERNAME:
+                      await update.message.reply_text("⛔ شما مجاز به استفاده از این ربات نیستید.")
+                      return
+
+                  base_url = get_tunnel_url()
+                  if not base_url:
+                      await update.message.reply_text("❌ سرویس دهی موقتاً در دسترس نیست. لحظاتی بعد تلاش کنید.")
+                      return
+
+                  doc = update.message.document
+                  photo = update.message.photo
+                  video = update.message.video
+                  if doc:
+                      file_obj = doc
+                      ext = os.path.splitext(doc.file_name or '')[1] if doc.file_name else '.bin'
+                      fname = f"{int(time.time())}_{doc.file_unique_id}{ext}"
+                  elif photo:
+                      file_obj = photo[-1]
+                      fname = f"{int(time.time())}_{file_obj.file_unique_id}.jpg"
+                  elif video:
+                      file_obj = video
+                      fname = f"{int(time.time())}_{file_obj.file_unique_id}.mp4"
+                  else:
+                      await update.message.reply_text("❌ فقط فایل، عکس و ویدیو پشتیبانی می‌شود.")
+                      return
+
+                  file_path = UPLOAD_DIR / fname
+
+                  # ===== دانلود فایل با گزارش کامل خطا =====
+                  try:
+                      new_file = await file_obj.get_file()
+                      await new_file.download_to_drive(file_path)
+                  except Exception as e:
+                      tb = traceback.format_exc()
+                      error_msg = f"❌ خطا در دانلود فایل:\n\n{str(e)}\n\n{tb}"
+                      await send_error(update, error_msg)
+                      return
+
+                  # ثبت زمان انقضا
+                  expiry_time = datetime.now() + EXPIRY_DURATION
+                  file_expiry[fname] = expiry_time
+
+                  link = f"{base_url}/{fname}"
+                  await update.message.reply_text(
+                      f"✅ فایل ذخیره شد.\n"
+                      f"🔗 لینک: {link}\n"
+                      f"⏳ اعتبار تا: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                  )
+
               except Exception as e:
-                  logger.error(f"Download error: {e}")
-                  await update.message.reply_text("❌ خطا در دانلود فایل.")
-                  return
-
-              expiry_time = datetime.now() + EXPIRY_DURATION
-              file_expiry[fname] = expiry_time
-
-              link = f"{base_url}/{fname}"
-              await update.message.reply_text(
-                  f"✅ فایل ذخیره شد.\n"
-                  f"🔗 لینک: {link}\n"
-                  f"⏳ اعتبار تا: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}"
-              )
+                  tb = traceback.format_exc()
+                  error_msg = f"❌ خطای غیرمنتظره در handle_file:\n\n{str(e)}\n\n{tb}"
+                  await send_error(update, error_msg)
 
           def main():
+              # شروع ترد پاک‌کننده
               t = threading.Thread(target=cleaner, daemon=True)
               t.start()
 
