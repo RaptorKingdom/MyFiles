@@ -14,12 +14,13 @@ concurrency:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 360             # ۶ ساعت (برای اطمینان)
+    timeout-minutes: 360
     env:
       TOKEN: ${{ secrets.TOKEN }}
       UPLOAD_DIR: /tmp/uploads
-      TOTAL_DURATION: 18000          # ۵ ساعت (ثانیه)
-      CHECK_INTERVAL: 30             # ثانیه
+      TOTAL_DURATION: 18000
+      CHECK_INTERVAL: 30
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,7 +31,8 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install python-telegram-bot==20.7
+        run: |
+          pip install python-telegram-bot==20.7
 
       - name: Create upload directory
         run: mkdir -p ${{ env.UPLOAD_DIR }}
@@ -48,28 +50,25 @@ jobs:
           from telegram import Update
           from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-          # ========== تنظیمات از محیط ==========
+          # ========== تنظیمات ==========
           TOKEN = os.environ['TOKEN']
           UPLOAD_DIR = Path(os.environ.get('UPLOAD_DIR', '/tmp/uploads'))
           UPLOAD_DIR.mkdir(exist_ok=True)
           TUNNEL_URL_FILE = Path('tunnel-url.txt')
+          EXPIRY_DURATION = timedelta(seconds=7200)   # ۲ ساعت
+          ALLOWED_USERNAME = 'a_exhausted'            # فقط این کاربر مجاز است
 
-          # مدت اعتبار هر فایل (۲ ساعت)
-          EXPIRY_DURATION = timedelta(seconds=7200)
-
-          # ========== وضعیت فایل‌ها ==========
-          file_expiry = {}   # filename -> datetime انقضا
+          file_expiry = {}   # filename -> datetime
 
           logging.basicConfig(level=logging.INFO)
           logger = logging.getLogger(__name__)
 
           def get_tunnel_url():
-              """خواندن آخرین آدرس تونل از فایل"""
               if TUNNEL_URL_FILE.exists():
                   return TUNNEL_URL_FILE.read_text().strip()
               return None
 
-          # ========== تابع پاک‌کننده ==========
+          # ========== پاک‌کننده فایل‌های منقضی ==========
           def cleaner():
               while True:
                   now = datetime.now()
@@ -82,18 +81,26 @@ jobs:
                       del file_expiry[f]
                   time.sleep(60)
 
-          # ========== هندلرهای ربات ==========
+          # ========== هندلرها ==========
           async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              user = update.effective_user
+              if user.username != ALLOWED_USERNAME:
+                  await update.message.reply_text("⛔ شما مجاز به استفاده از این ربات نیستید.")
+                  return
               await update.message.reply_text(
                   "👋 سلام! فایل، عکس یا ویدیو بفرستید تا لینک دریافت کنید.\n"
                   f"⏳ هر لینک به مدت {EXPIRY_DURATION.seconds//3600} ساعت معتبر است."
               )
 
           async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-              # بررسی وجود تونل
+              user = update.effective_user
+              if user.username != ALLOWED_USERNAME:
+                  await update.message.reply_text("⛔ شما مجاز به استفاده از این ربات نیستید.")
+                  return
+
               base_url = get_tunnel_url()
               if not base_url:
-                  await update.message.reply_text("❌ متأسفانه سرویس دهی موقتاً در دسترس نیست. لطفاً لحظاتی بعد تلاش کنید.")
+                  await update.message.reply_text("❌ سرویس دهی موقتاً در دسترس نیست. لحظاتی بعد تلاش کنید.")
                   return
 
               # تشخیص نوع فایل
@@ -102,23 +109,20 @@ jobs:
               video = update.message.video
               if doc:
                   file_obj = doc
-                  ext = os.path.splitext(doc.file_name)[1] if doc.file_name else '.bin'
+                  ext = os.path.splitext(doc.file_name or '')[1] if doc.file_name else '.bin'
                   fname = f"{int(time.time())}_{doc.file_unique_id}{ext}"
               elif photo:
                   file_obj = photo[-1]
-                  ext = '.jpg'
-                  fname = f"{int(time.time())}_{file_obj.file_unique_id}{ext}"
+                  fname = f"{int(time.time())}_{file_obj.file_unique_id}.jpg"
               elif video:
                   file_obj = video
-                  ext = '.mp4'
-                  fname = f"{int(time.time())}_{file_obj.file_unique_id}{ext}"
+                  fname = f"{int(time.time())}_{file_obj.file_unique_id}.mp4"
               else:
-                  await update.message.reply_text("❌ فرمت پشتیبانی نمی‌شود. فقط فایل، عکس و ویدیو.")
+                  await update.message.reply_text("❌ فقط فایل، عکس و ویدیو پشتیبانی می‌شود.")
                   return
 
               file_path = UPLOAD_DIR / fname
 
-              # دانلود فایل
               try:
                   new_file = await file_obj.get_file()
                   await new_file.download_to_drive(file_path)
@@ -127,11 +131,9 @@ jobs:
                   await update.message.reply_text("❌ خطا در دانلود فایل.")
                   return
 
-              # ثبت زمان انقضا
               expiry_time = datetime.now() + EXPIRY_DURATION
               file_expiry[fname] = expiry_time
 
-              # ساخت لینک
               link = f"{base_url}/{fname}"
               await update.message.reply_text(
                   f"✅ فایل ذخیره شد.\n"
@@ -182,12 +184,12 @@ jobs:
           python3 bot.py &
           echo $! > /tmp/bot.pid
 
-      - name: Keep alive (5 hours) with tunnel monitoring
+      - name: Keep alive (5 hours) with monitoring
         run: |
-          set +e  # جلوگیری از خروج در صورت خطا
+          set +e
           END_TIME=$(( $(date +%s) + ${{ env.TOTAL_DURATION }} ))
           echo "⏳ نگهبانی به مدت ۵ ساعت..."
-          
+
           while [ $(date +%s) -lt $END_TIME ]; do
             # ===== بررسی سلامت تونل =====
             TUNNEL_URL=$(cat tunnel-url.txt 2>/dev/null)
@@ -220,10 +222,9 @@ jobs:
               echo $! > /tmp/bot.pid
             fi
 
-            # ===== نمایش زمان باقی‌مانده =====
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
-            
+
             sleep ${{ env.CHECK_INTERVAL }}
           done
 
