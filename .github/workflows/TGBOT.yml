@@ -16,7 +16,7 @@ jobs:
       UPLOAD_DIR: /tmp/uploads
       TOTAL_DURATION: 18000
       CHECK_INTERVAL: 30
-      LOCAL_API_URL: http://localhost:8081/bot  # آدرس سرور محلی
+      LOCAL_API_URL: http://localhost:8081   # بدون /bot
 
     steps:
       - name: Checkout
@@ -33,13 +33,16 @@ jobs:
 
       - name: Start Telegram Bot API Server (Local)
         run: |
-          # اجرای سرور محلی با Docker
+          # اجرای سرور محلی با پارامترهای صحیح
           docker run -d --restart=unless-stopped --name=telegram-bot-api \
             -p 8081:8081 \
             -e TELEGRAM_BOT_API_TOKEN=${{ secrets.TOKEN }} \
-            aiogram/telegram-bot-api:latest
+            aiogram/telegram-bot-api:latest \
+            --local --http-port=8081
           # صبر برای آماده شدن سرور
           sleep 5
+          # تست اتصال به سرور محلی
+          curl -s http://localhost:8081/getMe || (echo "❌ سرور محلی پاسخ نمی‌دهد" && exit 1)
           echo "✅ سرور محلی Bot API راه‌اندازی شد."
 
       - name: Create upload directory
@@ -68,7 +71,7 @@ jobs:
           TUNNEL_URL_FILE = Path('tunnel-url.txt')
           EXPIRY_DURATION = timedelta(seconds=7200)   # ۲ ساعت
           ALLOWED_USERNAME = 'a_exhausted'
-          LOCAL_API_URL = os.environ.get('LOCAL_API_URL', 'http://localhost:8081/bot')
+          LOCAL_API_URL = os.environ.get('LOCAL_API_URL', 'http://localhost:8081')
 
           file_expiry = {}
 
@@ -147,9 +150,7 @@ jobs:
 
                   # ===== دانلود با سرور محلی =====
                   try:
-                      # دریافت اطلاعات فایل از سرور محلی
                       tg_file = await context.bot.get_file(file_obj.file_id)
-                      # دانلود مستقیم به مسیر (در حالت local_mode خیلی سریع است)
                       await tg_file.download_to_drive(file_path)
                   except Exception as e:
                       tb = traceback.format_exc()
@@ -157,7 +158,6 @@ jobs:
                       await send_error(update, error_msg)
                       return
 
-                  # ثبت زمان انقضا
                   expiry_time = datetime.now() + EXPIRY_DURATION
                   file_expiry[fname] = expiry_time
 
@@ -184,14 +184,10 @@ jobs:
                   .token(TOKEN)
                   .base_url(LOCAL_API_URL)          # اتصال به سرور محلی
                   .local_mode(True)                 # فعال‌سازی حالت محلی
-                  .connect_timeout(60.0)            # افزایش timeout برای فایل‌های بزرگ
+                  .connect_timeout(60.0)
                   .read_timeout(120.0)
                   .build()
               )
-
-              # قبل از شروع، از سرور ابری خارج شو
-              # (فقط یک بار لازم است، اما بی‌خطر است)
-              # await application.bot.log_out()  # در صورت نیاز فعال کنید
 
               application.add_handler(CommandHandler("start", start))
               application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file))
@@ -278,7 +274,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          # توقف کانتینر Docker
           docker stop telegram-bot-api || true
           docker rm telegram-bot-api || true
           kill $(cat /tmp/bot.pid) 2>/dev/null || true
