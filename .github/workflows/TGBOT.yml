@@ -33,17 +33,25 @@ jobs:
 
       - name: Start Telegram Bot API Server (Local)
         run: |
-          # اجرای سرور محلی با پارامترهای صحیح
+          # اجرای سرور محلی با متغیرهای محیطی (نه پارامترهای خط فرمان)
           docker run -d --restart=unless-stopped --name=telegram-bot-api \
             -p 8081:8081 \
             -e TELEGRAM_BOT_API_TOKEN=${{ secrets.TOKEN }} \
-            aiogram/telegram-bot-api:latest \
-            --local --http-port=8081
+            -e TELEGRAM_BOT_API_LOCAL="true" \
+            -e TELEGRAM_BOT_API_HTTP_PORT="8081" \
+            aiogram/telegram-bot-api:latest
+          
           # صبر برای آماده شدن سرور
-          sleep 5
+          sleep 8
+          
           # تست اتصال به سرور محلی
-          curl -s http://localhost:8081/getMe || (echo "❌ سرور محلی پاسخ نمی‌دهد" && exit 1)
-          echo "✅ سرور محلی Bot API راه‌اندازی شد."
+          if curl -s http://localhost:8081/getMe; then
+            echo "✅ سرور محلی Bot API راه‌اندازی شد."
+          else
+            echo "❌ سرور محلی پاسخ نمی‌دهد"
+            docker logs telegram-bot-api
+            exit 1
+          fi
 
       - name: Create upload directory
         run: mkdir -p ${{ env.UPLOAD_DIR }}
