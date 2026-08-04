@@ -16,6 +16,7 @@ jobs:
       UPLOAD_DIR: /tmp/uploads
       TOTAL_DURATION: 18000
       CHECK_INTERVAL: 30
+      LOCAL_API_URL: http://localhost:8081/bot  # آدرس سرور محلی
 
     steps:
       - name: Checkout
@@ -28,7 +29,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install python-telegram-bot==20.7
+          pip install python-telegram-bot==20.7 aiohttp aiofiles
+
+      - name: Start Telegram Bot API Server (Local)
+        run: |
+          # اجرای سرور محلی با Docker
+          docker run -d --restart=unless-stopped --name=telegram-bot-api \
+            -p 8081:8081 \
+            -e TELEGRAM_BOT_API_TOKEN=${{ secrets.TOKEN }} \
+            aiogram/telegram-bot-api:latest
+          # صبر برای آماده شدن سرور
+          sleep 5
+          echo "✅ سرور محلی Bot API راه‌اندازی شد."
 
       - name: Create upload directory
         run: mkdir -p ${{ env.UPLOAD_DIR }}
@@ -46,6 +58,8 @@ jobs:
           from pathlib import Path
           from telegram import Update
           from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+          import aiohttp
+          import aiofiles
 
           # ========== تنظیمات ==========
           TOKEN = os.environ['TOKEN']
@@ -54,6 +68,7 @@ jobs:
           TUNNEL_URL_FILE = Path('tunnel-url.txt')
           EXPIRY_DURATION = timedelta(seconds=7200)   # ۲ ساعت
           ALLOWED_USERNAME = 'a_exhausted'
+          LOCAL_API_URL = os.environ.get('LOCAL_API_URL', 'http://localhost:8081/bot')
 
           file_expiry = {}
 
@@ -78,7 +93,6 @@ jobs:
                   time.sleep(60)
 
           async def send_error(update: Update, error_text: str):
-              """ارسال خطا به کاربر با تقسیم اگر طولانی باشد"""
               if len(error_text) > 4000:
                   for i in range(0, len(error_text), 4000):
                       await update.message.reply_text(error_text[i:i+4000])
@@ -93,7 +107,8 @@ jobs:
                       return
                   await update.message.reply_text(
                       "👋 سلام! فایل، عکس یا ویدیو بفرستید تا لینک دریافت کنید.\n"
-                      f"⏳ هر لینک به مدت {EXPIRY_DURATION.seconds//3600} ساعت معتبر است."
+                      f"⏳ هر لینک به مدت {EXPIRY_DURATION.seconds//3600} ساعت معتبر است.\n"
+                      "📦 **حداکثر حجم: ۲ گیگابایت** (با سرور محلی)"
                   )
               except Exception as e:
                   tb = traceback.format_exc()
@@ -130,10 +145,12 @@ jobs:
 
                   file_path = UPLOAD_DIR / fname
 
-                  # ===== دانلود فایل با گزارش کامل خطا =====
+                  # ===== دانلود با سرور محلی =====
                   try:
-                      new_file = await file_obj.get_file()
-                      await new_file.download_to_drive(file_path)
+                      # دریافت اطلاعات فایل از سرور محلی
+                      tg_file = await context.bot.get_file(file_obj.file_id)
+                      # دانلود مستقیم به مسیر (در حالت local_mode خیلی سریع است)
+                      await tg_file.download_to_drive(file_path)
                   except Exception as e:
                       tb = traceback.format_exc()
                       error_msg = f"❌ خطا در دانلود فایل:\n\n{str(e)}\n\n{tb}"
@@ -153,20 +170,34 @@ jobs:
 
               except Exception as e:
                   tb = traceback.format_exc()
-                  error_msg = f"❌ خطای غیرمنتظره در handle_file:\n\n{str(e)}\n\n{tb}"
+                  error_msg = f"❌ خطای غیرمنتظره:\n\n{str(e)}\n\n{tb}"
                   await send_error(update, error_msg)
 
           def main():
-              # شروع ترد پاک‌کننده
+              # پاک‌کننده فایل‌های منقضی
               t = threading.Thread(target=cleaner, daemon=True)
               t.start()
 
-              app = Application.builder().token(TOKEN).build()
-              app.add_handler(CommandHandler("start", start))
-              app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file))
+              # ===== راه‌اندازی ربات با سرور محلی =====
+              application = (
+                  Application.builder()
+                  .token(TOKEN)
+                  .base_url(LOCAL_API_URL)          # اتصال به سرور محلی
+                  .local_mode(True)                 # فعال‌سازی حالت محلی
+                  .connect_timeout(60.0)            # افزایش timeout برای فایل‌های بزرگ
+                  .read_timeout(120.0)
+                  .build()
+              )
 
-              logger.info("ربات شروع به کار کرد.")
-              app.run_polling()
+              # قبل از شروع، از سرور ابری خارج شو
+              # (فقط یک بار لازم است، اما بی‌خطر است)
+              # await application.bot.log_out()  # در صورت نیاز فعال کنید
+
+              application.add_handler(CommandHandler("start", start))
+              application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file))
+
+              logger.info("ربات با سرور محلی Bot API شروع به کار کرد.")
+              application.run_polling()
 
           if __name__ == "__main__":
               main()
@@ -247,6 +278,9 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          # توقف کانتینر Docker
+          docker stop telegram-bot-api || true
+          docker rm telegram-bot-api || true
           kill $(cat /tmp/bot.pid) 2>/dev/null || true
           kill $(cat /tmp/webserver.pid) 2>/dev/null || true
           pkill cloudflared || true
