@@ -1,1 +1,1 @@
-https://function-institutes-priced-integer.trycloudflare.com
+https://words-introductory-goto-symposium.trycloudflare.com
