@@ -1,924 +1,26 @@
-import 'dart:async';
-import 'dart:collection';
-import 'dart:ui' as ui;
-import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:intl/intl.dart' hide TextDirection;
-import 'package:intl/date_symbol_data_local.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart' as path_provider;
-import 'package:html/parser.dart' as html_parser;
-import 'package:shamsi_date/shamsi_date.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:auto_size_text/auto_size_text.dart';
-import 'package:persian_datetimepickers/persian_datetimepickers.dart';
-import 'package:persian_number_utility/persian_number_utility.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-
-// ✅ کتابخانه Glass (فقط برای نوار پایین استفاده می‌شود)
+import 'package:intl/intl.dart' hide TextDirection;
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
-part 'main.g.dart';
-
-// -------------------- Helpers --------------------
-String formatRial(double amount) {
-  final formatted = NumberFormat('#,###').format(amount);
-  return formatted.toPersianDigit();
-}
-
-String formatDoubleWithoutTrailingZeros(double value) {
-  if (value == value.roundToDouble()) {
-    return value.round().toString();
-  } else {
-    String str = value.toString();
-    if (str.contains('.')) {
-      str = str.replaceAll(RegExp(r'0*$'), '');
-      if (str.endsWith('.')) str = str.substring(0, str.length - 1);
-    }
-    return str;
-  }
-}
-
-String formatWithSeparator(double value) {
-  if (value == 0) return '';
-  return NumberFormat('#,###').format(value);
-}
-
-String formatJalaliDate(DateTime dt) {
-  final j = Jalali.fromDateTime(dt);
-  return '${j.year}/${j.month.toString().padLeft(2,'0')}/${j.day.toString().padLeft(2,'0')}';
-}
-
-String coinName(String t) {
-  switch(t) {
-    case 'coin_new': return 'سکه تمام (امامی)';
-    case 'coin_old': return 'سکه تمام (قدیم)';
-    case 'coin_half': return 'نیم سکه';
-    case 'coin_quarter': return 'ربع سکه';
-    case 'coin_1g': return 'سکه یک گرمی';
-    default: return t;
-  }
-}
-
-String goldTypeName(String k) {
-  switch(k) {
-    case 'gold_18': return 'طلای ۱۸ عیار';
-    case 'gold_24': return 'طلای ۲۴ عیار';
-    case 'gold_ons': return 'انس طلا';
-    case 'gold_mazneh': return 'مظنه تهران';
-    case 'coin_old': return 'سکه قدیم';
-    case 'coin_new': return 'سکه جدید';
-    case 'coin_half': return 'نیم سکه';
-    case 'coin_quarter': return 'ربع سکه';
-    case 'coin_1g': return 'سکه یک گرمی';
-    default: return k;
-  }
-}
-
-String formatToman(double amount) {
-  final toman = amount / 10;
-  final formatted = NumberFormat('#,###').format(toman);
-  return '${formatted.toPersianDigit()} تومان';
-}
-
-String numberToTomanWords(double amount) {
-  final toman = amount / 10;
-  final intValue = toman.round();
-  final words = intValue.toString().toWord();
-  return words.toPersianDigit() + ' تومان';
-}
-
-class NumberInputWithToman extends StatefulWidget {
-  final String label;
-  final String? initialValue;
-  final ValueChanged<String> onSaved;
-  final TextInputType keyboardType;
-  final FormFieldValidator<String>? validator;
-  final bool isPrice;
-
-  const NumberInputWithToman({
-    Key? key,
-    required this.label,
-    this.initialValue,
-    required this.onSaved,
-    this.keyboardType = TextInputType.number,
-    this.validator,
-    this.isPrice = true,
-  }) : super(key: key);
-
-  @override
-  _NumberInputWithTomanState createState() => _NumberInputWithTomanState();
-}
-
-class _NumberInputWithTomanState extends State<NumberInputWithToman> {
-  late TextEditingController _controller;
-  String _tomanText = '';
-  String _wordsText = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initialValue ?? '');
-    _updateDisplay(_controller.text);
-    _controller.addListener(() {
-      _updateDisplay(_controller.text);
-    });
-  }
-
-  void _updateDisplay(String value) {
-    final clean = value.replaceAll(RegExp(r'[^\d]'), '');
-    if (clean.isNotEmpty && widget.isPrice) {
-      final num = double.tryParse(clean) ?? 0;
-      setState(() {
-        _tomanText = formatToman(num);
-        _wordsText = numberToTomanWords(num);
-      });
-    } else {
-      setState(() {
-        _tomanText = '';
-        _wordsText = '';
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
-          controller: _controller,
-          decoration: InputDecoration(
-            labelText: widget.label,
-            labelStyle: TextStyle(fontFamily: 'Vazir'),
-          ),
-          keyboardType: widget.keyboardType,
-          textAlign: TextAlign.left,
-          textDirection: TextDirection.ltr,
-          inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[0-9]')),
-            ThousandsSeparatorInputFormatter(),
-          ],
-          validator: widget.validator,
-          onSaved: (v) {
-            final cleaned = v?.replaceAll(RegExp(r'[^\d]'), '') ?? '';
-            widget.onSaved(cleaned);
-          },
-        ),
-        if (_tomanText.isNotEmpty && widget.isPrice)
-          Padding(
-            padding: const EdgeInsets.only(top: 4.0, right: 8.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _tomanText,
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                  textDirection: TextDirection.rtl,
-                ),
-                Text(
-                  _wordsText,
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                  textDirection: TextDirection.rtl,
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class ThousandsSeparatorInputFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    if (newValue.text.isEmpty) return newValue;
-    final clean = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
-    if (clean.isEmpty) return newValue;
-    final intValue = int.tryParse(clean);
-    if (intValue == null) return newValue;
-    final formatted = NumberFormat('#,###').format(intValue);
-    return newValue.copyWith(
-      text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
-    );
-  }
-}
-
-Future<DateTime?> pickJalaliDate(BuildContext context, DateTime initial) async {
-  final picked = await showPersianDatePicker(
-    context: context,
-    initialDate: initial,
-    firstDate: DateTime(1370, 1, 1),
-    lastDate: DateTime.now(),
-  );
-  return picked;
-}
-
-// -------------------- Utility Calculator --------------------
-class Calculator {
-  static int daysBetween(DateTime from, DateTime to) {
-    from = DateTime(from.year, from.month, from.day);
-    to = DateTime(to.year, to.month, to.day);
-    return (to.difference(from).inHours / 24).round();
-  }
-
-  static double calculateProfit({
-    required double currentPrice,
-    required double purchasePrice,
-    required double quantity,
-    required double paidAmount,
-    required double interestRate,
-    required int days,
-  }) {
-    final currentValue = currentPrice * quantity;
-    final purchaseProfit = currentValue - paidAmount;
-    double years = days / 365.0;
-    double bankProfit = paidAmount * (pow(1 + interestRate / 100, years) - 1);
-    return purchaseProfit - bankProfit;
-  }
-}
-
-// -------------------- Models --------------------
-@HiveType(typeId: 0)
-class GoldTransaction extends HiveObject {
-  @HiveField(0) String id;
-  @HiveField(1) String type;
-  @HiveField(2) DateTime purchaseDate;
-  @HiveField(3) double purchasePricePerUnit;
-  @HiveField(4) double quantity;
-  @HiveField(5) String description;
-  @HiveField(6) double remainingQuantity;
-
-  GoldTransaction({
-    required this.id, required this.type, required this.purchaseDate,
-    required this.purchasePricePerUnit, required this.quantity,
-    required this.description, double? remainingQuantity,
-  }) : remainingQuantity = remainingQuantity ?? quantity;
-}
-
-@HiveType(typeId: 1)
-class CoinTransaction extends HiveObject {
-  @HiveField(0) String id;
-  @HiveField(1) String coinType;
-  @HiveField(2) DateTime purchaseDate;
-  @HiveField(3) double purchasePricePerUnit;
-  @HiveField(4) int count;
-  @HiveField(5) String description;
-  @HiveField(6) int remainingCount;
-
-  CoinTransaction({
-    required this.id, required this.coinType, required this.purchaseDate,
-    required this.purchasePricePerUnit, required this.count,
-    required this.description, int? remainingCount,
-  }) : remainingCount = remainingCount ?? count;
-}
-
-@HiveType(typeId: 2)
-class SaleTransaction extends HiveObject {
-  @HiveField(0) String id;
-  @HiveField(1) String lotId;
-  @HiveField(2) DateTime saleDate;
-  @HiveField(3) double salePricePerUnit;
-  @HiveField(4) double quantity;
-  @HiveField(5) bool isGold;
-  @HiveField(6) String? coinType;
-  @HiveField(7) double purchasePricePerUnit;
-  @HiveField(8) DateTime purchaseDate;
-
-  SaleTransaction({
-    required this.id, required this.lotId, required this.saleDate,
-    required this.salePricePerUnit, required this.quantity,
-    required this.isGold, this.coinType,
-    required this.purchasePricePerUnit,
-    required this.purchaseDate,
-  });
-}
-
-// -------------------- Price Models --------------------
-class PriceResponse {
-  final String name;
-  final double? currentPrice;
-  final double? high;
-  final double? low;
-  final double? yesterdayAvg;
-  final Change? change;
-
-  PriceResponse({required this.name, this.currentPrice, this.high, this.low, this.yesterdayAvg, this.change});
-
-  factory PriceResponse.fromJson(Map<String, dynamic> json) => PriceResponse(
-    name: json['name'] ?? '',
-    currentPrice: json['current_price'] != null ? (json['current_price'] as num).toDouble() : null,
-    high: json['high'] != null ? (json['high'] as num).toDouble() : null,
-    low: json['low'] != null ? (json['low'] as num).toDouble() : null,
-    yesterdayAvg: json['yesterday_avg'] != null ? (json['yesterday_avg'] as num).toDouble() : null,
-    change: json['change'] != null ? Change.fromJson(json['change']) : null,
-  );
-}
-
-class Change {
-  final double? value;
-  final double? percent;
-  final String? direction;
-  Change({this.value, this.percent, this.direction});
-  factory Change.fromJson(Map<String, dynamic> json) => Change(
-    value: json['value'] != null ? (json['value'] as num).toDouble() : null,
-    percent: json['percent'] != null ? (json['percent'] as num).toDouble() : null,
-    direction: json['direction'],
-  );
-}
-
-// -------------------- API Service --------------------
-class ApiService {
-  static const String _pageUrl = 'https://www.estjt.ir/price/';
-  static const Map<String, String> _nameToKey = {
-    'انس طلا': 'gold_ons', 'مظنه تهران': 'gold_mazneh',
-    'طلای ۱۸ عیار': 'gold_18', 'طلای ۲۴ عیار': 'gold_24',
-    'سکه طرح قدیم': 'coin_old', 'سکه طرح جدید': 'coin_new',
-    'نیم سکه': 'coin_half', 'ربع سکه': 'coin_quarter', 'سکه یک گرمی': 'coin_1g',
-  };
-
-  static String _persianToEnglish(String s) {
-    const persian = '۰۱۲۳۴۵۶۷۸۹';
-    const english = '0123456789';
-    final buf = StringBuffer();
-    for (final ch in s.runes) {
-      final c = String.fromCharCode(ch);
-      final i = persian.indexOf(c);
-      buf.write(i != -1 ? english[i] : c);
-    }
-    return buf.toString();
-  }
-
-  static double? _parsePrice(String text) {
-    if (text.trim() == '—') return null;
-    final cleaned = _persianToEnglish(text).replaceAll(RegExp(r'[^\d.]'), '');
-    return cleaned.isEmpty ? null : double.tryParse(cleaned);
-  }
-
-  static Map<String, double?>? _parseChange(String text) {
-    final t = _persianToEnglish(text);
-    final m = RegExp(r'([\d.]+)\s*\(([\d.]+)\)').firstMatch(t);
-    if (m != null) return {'value': double.tryParse(m.group(1)!), 'percent': double.tryParse(m.group(2)!)};
-    return null;
-  }
-
-  static Future<Map<String, PriceResponse>> fetchAllPrices() async {
-    try {
-      final res = await http.get(Uri.parse(_pageUrl), headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'text/html',
-        'Accept-Language': 'en-US,en;q=0.5',
-      });
-      if (res.statusCode != 200) return {};
-      final doc = html_parser.parse(res.body);
-      final rows = doc.querySelectorAll('div.price-box table tbody tr');
-      final Map<String, PriceResponse> prices = {};
-      for (final row in rows) {
-        final cells = row.querySelectorAll('td');
-        if (cells.length < 6) continue;
-        final name = cells[0].text.trim();
-        final key = _nameToKey[name];
-        if (key == null) continue;
-        var cur = _parsePrice(cells[1].text.trim());
-        var high = _parsePrice(cells[2].text.trim());
-        var low = _parsePrice(cells[3].text.trim());
-        var yday = _parsePrice(cells[4].text.trim());
-        String? dir; double? cVal; double? cPct;
-        final span = cells[5].querySelector('span');
-        if (span != null) {
-          if (span.classes.contains('asc')) dir = 'up';
-          else if (span.classes.contains('desc')) dir = 'down';
-          final cd = _parseChange(span.text.trim());
-          if (cd != null) { cVal = cd['value']; cPct = cd['percent']; }
-        }
-
-        const rialsMultiplier = 10.0;
-        if (key != 'gold_ons') {
-          cur = cur != null ? cur * rialsMultiplier : null;
-          high = high != null ? high * rialsMultiplier : null;
-          low = low != null ? low * rialsMultiplier : null;
-          yday = yday != null ? yday * rialsMultiplier : null;
-          if (cVal != null) cVal = cVal * rialsMultiplier;
-        }
-
-        prices[key] = PriceResponse(
-          name: name,
-          currentPrice: cur,
-          high: high,
-          low: low,
-          yesterdayAvg: yday,
-          change: Change(value: cVal, percent: cPct, direction: dir),
-        );
-      }
-      return prices;
-    } catch (_) { return {}; }
-  }
-}
-
-// -------------------- Providers --------------------
-class PriceProvider extends ChangeNotifier {
-  Map<String, PriceResponse> _prices = {};
-  Map<String, PriceResponse> _lastSavedPrices = {};
-  DateTime _lastUpdated = DateTime(2000);
-  Timer? _timer;
-  final SharedPreferences _prefs;
-  static const List<String> _priceKeys = [
-    'gold_18','gold_24','gold_ons','gold_mazneh',
-    'coin_old','coin_new','coin_half','coin_quarter','coin_1g'
-  ];
-  Map<String, PriceResponse> get prices => UnmodifiableMapView(_prices);
-  DateTime get lastUpdated => _lastUpdated;
-
-  PriceProvider(this._prefs) {
-    _loadSavedPrices(); fetchPrices(); startAutoUpdate();
-  }
-
-  void _loadSavedPrices() {
-    _lastSavedPrices = {};
-    for (var key in _priceKeys) {
-      String? jsonStr = _prefs.getString('price_$key');
-      if (jsonStr != null) {
-        try {
-          final json = jsonDecode(jsonStr);
-          _lastSavedPrices[key] = PriceResponse.fromJson(json);
-        } catch (_) {}
-      }
-    }
-    if (_lastSavedPrices.isNotEmpty) {
-      _prices = Map.from(_lastSavedPrices);
-      int? t = _prefs.getInt('last_update');
-      if (t != null) _lastUpdated = DateTime.fromMillisecondsSinceEpoch(t);
-    }
-  }
-
-  Future<void> _savePrices(Map<String, PriceResponse> prices) async {
-    for (var e in prices.entries) {
-      final jsonStr = jsonEncode({
-        'name': e.value.name,
-        'current_price': e.value.currentPrice,
-        'high': e.value.high,
-        'low': e.value.low,
-        'yesterday_avg': e.value.yesterdayAvg,
-        'change': e.value.change != null ? {
-          'value': e.value.change!.value,
-          'percent': e.value.change!.percent,
-          'direction': e.value.change!.direction,
-        } : null,
-      });
-      await _prefs.setString('price_${e.key}', jsonStr);
-    }
-    await _prefs.setInt('last_update', DateTime.now().millisecondsSinceEpoch);
-  }
-
-  void startAutoUpdate({int intervalSeconds = 300}) {
-    _timer?.cancel();
-    _timer = Timer.periodic(Duration(seconds: intervalSeconds), (_) => fetchPrices());
-  }
-  void setAutoUpdateInterval(int s) { startAutoUpdate(intervalSeconds: s); }
-
-  Future<void> fetchPrices() async {
-    final newPrices = await ApiService.fetchAllPrices();
-    if (newPrices.isNotEmpty) {
-      _prices = newPrices;
-      _lastSavedPrices = Map.from(newPrices);
-      _lastUpdated = DateTime.now();
-      await _savePrices(newPrices);
-    }
-    notifyListeners();
-  }
-
-  @override void dispose() { _timer?.cancel(); super.dispose(); }
-}
-
-class SettingsProvider extends ChangeNotifier {
-  double _bankInterestRate = 26.0;
-  int _autoUpdateInterval = 300;
-  Color _secondaryColor = Colors.amber;
-  double get bankInterestRate => _bankInterestRate;
-  int get autoUpdateInterval => _autoUpdateInterval;
-  Color get secondaryColor => _secondaryColor;
-  final SharedPreferences _prefs;
-  SettingsProvider(this._prefs) { _loadSettings(); }
-  void _loadSettings() {
-    _bankInterestRate = _prefs.getDouble('bankInterestRate') ?? 26.0;
-    _autoUpdateInterval = _prefs.getInt('autoUpdateInterval') ?? 300;
-    final colorStr = _prefs.getString('secondaryColor');
-    if (colorStr != null) {
-      try {
-        _secondaryColor = Color(int.parse(colorStr));
-      } catch (_) {}
-    }
-  }
-  Future<void> setBankInterestRate(double v) async { _bankInterestRate = v; await _prefs.setDouble('bankInterestRate', v); notifyListeners(); }
-  Future<void> setAutoUpdateInterval(int s) async { _autoUpdateInterval = s; await _prefs.setInt('autoUpdateInterval', s); notifyListeners(); }
-  Future<void> setSecondaryColor(Color c) async {
-    _secondaryColor = c;
-    await _prefs.setString('secondaryColor', c.value.toString());
-    notifyListeners();
-  }
-}
-
-/// BasePriceProvider با قابلیت ذخیره‌سازی در SharedPreferences
-class BasePriceProvider extends ChangeNotifier {
-  Map<String, double> _basePrices = {};
-  final SharedPreferences _prefs;
-
-  BasePriceProvider(this._prefs) {
-    _loadBasePrices();
-  }
-
-  Map<String, double> get basePrices => UnmodifiableMapView(_basePrices);
-
-  void _loadBasePrices() {
-    final jsonStr = _prefs.getString('basePrices');
-    if (jsonStr != null) {
-      try {
-        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
-        _basePrices = map.map((k, v) => MapEntry(k, (v as num).toDouble()));
-      } catch (_) {
-        _setDefaultBasePrices();
-      }
-    } else {
-      _setDefaultBasePrices();
-    }
-    notifyListeners();
-  }
-
-  void _setDefaultBasePrices() {
-    _basePrices = {
-      'gold_18': 201226000.0,
-      'gold_24': 268301333.0,
-      'gold_ons': 0,
-      'gold_mazneh': 20122600.0,
-      'coin_old': 2089850000.0,
-      'coin_new': 2089850000.0,
-      'coin_half': 1081900000.0,
-      'coin_quarter': 595200000.0,
-      'coin_1g': 185000000.0,
-    };
-    _saveBasePrices();
-  }
-
-  Future<void> _saveBasePrices() async {
-    await _prefs.setString('basePrices', jsonEncode(_basePrices));
-  }
-
-  Future<void> setBasePrice(String key, double value) async {
-    _basePrices[key] = value;
-    await _saveBasePrices();
-    notifyListeners();
-  }
-}
-
-class DataProvider extends ChangeNotifier {
-  final Box<GoldTransaction> goldBox;
-  final Box<CoinTransaction> coinBox;
-  final Box<SaleTransaction> saleBox;
-
-  DataProvider({required this.goldBox, required this.coinBox, required this.saleBox}) {
-    if (goldBox.isEmpty && coinBox.isEmpty) _addDefaultData();
-  }
-
-  void _addDefaultData() {
-    goldBox.addAll([
-      GoldTransaction(id:'1',type:'gold_18',purchaseDate:DateTime(2025,1,2),purchasePricePerUnit:52518583,quantity:100,description:''),
-      GoldTransaction(id:'2',type:'gold_18',purchaseDate:DateTime(2025,2,9),purchasePricePerUnit:65792511,quantity:61.195,description:''),
-      GoldTransaction(id:'3',type:'gold_18',purchaseDate:DateTime(2025,4,13),purchasePricePerUnit:76180802,quantity:50,description:''),
-      GoldTransaction(id:'4',type:'gold_18',purchaseDate:DateTime(2025,10,6),purchasePricePerUnit:105960571,quantity:100,description:''),
-      GoldTransaction(id:'5',type:'gold_18',purchaseDate:DateTime(2025,11,10),purchasePricePerUnit:105730000,quantity:60,description:''),
-      GoldTransaction(id:'6',type:'gold_18',purchaseDate:DateTime(2025,12,14),purchasePricePerUnit:138048000,quantity:15,description:''),
-    ]);
-    coinBox.addAll([
-      CoinTransaction(id:'c1',coinType:'coin_quarter',purchaseDate:DateTime(2023,1,17),purchasePricePerUnit:70500000,count:3,description:'خرید از بورس کالای کارگزاری آگاه'),
-      CoinTransaction(id:'c2',coinType:'coin_new',purchaseDate:DateTime(2025,1,1),purchasePricePerUnit:560000000,count:2,description:'خرید از زهرا'),
-      CoinTransaction(id:'c3',coinType:'coin_quarter',purchaseDate:DateTime(2025,1,1),purchasePricePerUnit:174000000,count:1,description:'خرید از زهرا'),
-      CoinTransaction(id:'c4',coinType:'coin_new',purchaseDate:DateTime(2025,9,8),purchasePricePerUnit:832224932,count:6,description:'خرید از مرکز مبادلات سکه و ارز'),
-      CoinTransaction(id:'c5',coinType:'coin_half',purchaseDate:DateTime(2025,9,8),purchasePricePerUnit:441195425,count:10,description:'خرید از مرکز مبادلات سکه و ارز'),
-      CoinTransaction(id:'c6',coinType:'coin_quarter',purchaseDate:DateTime(2025,9,8),purchasePricePerUnit:257758617,count:14,description:'خرید از مرکز مبادلات سکه و ارز'),
-      CoinTransaction(id:'c7',coinType:'coin_half',purchaseDate:DateTime(2025,11,12),purchasePricePerUnit:575585000,count:1,description:'خرید از مرکز مبادلات کاربری مریم'),
-      CoinTransaction(id:'c8',coinType:'coin_quarter',purchaseDate:DateTime(2025,11,12),purchasePricePerUnit:327850000,count:2,description:'خرید از مرکز مبادلات کابری مریم'),
-      CoinTransaction(id:'c9',coinType:'coin_new',purchaseDate:DateTime(2026,2,15),purchasePricePerUnit:1930000000,count:4,description:'خرید از علی بابت پول ماشین'),
-      CoinTransaction(id:'c10',coinType:'coin_quarter',purchaseDate:DateTime(2026,2,15),purchasePricePerUnit:525000000,count:6,description:'خرید از علی بابت پول ماشین'),
-      CoinTransaction(id:'c11',coinType:'coin_half',purchaseDate:DateTime(2026,2,15),purchasePricePerUnit:970000000,count:3,description:'خرید از علی بابت پول ماشین'),
-    ]);
-  }
-
-  List<GoldTransaction> get activeGold => goldBox.values.where((g) => g.remainingQuantity > 0.0001).toList();
-  List<CoinTransaction> get activeCoins => coinBox.values.where((c) => c.remainingCount > 0).toList();
-
-  Future<void> addGold(GoldTransaction t) async { await goldBox.add(t); notifyListeners(); }
-  Future<void> updateGold(GoldTransaction t) async { await t.save(); notifyListeners(); }
-  Future<void> deleteGold(GoldTransaction t) async {
-    final salesToDelete = saleBox.values.where((s) => s.lotId == t.id && s.isGold).toList();
-    for (var s in salesToDelete) await s.delete();
-    await t.delete();
-    notifyListeners();
-  }
-  Future<void> addCoin(CoinTransaction t) async { await coinBox.add(t); notifyListeners(); }
-  Future<void> updateCoin(CoinTransaction t) async { await t.save(); notifyListeners(); }
-  Future<void> deleteCoin(CoinTransaction t) async {
-    final salesToDelete = saleBox.values.where((s) => s.lotId == t.id && !s.isGold).toList();
-    for (var s in salesToDelete) await s.delete();
-    await t.delete();
-    notifyListeners();
-  }
-
-  Future<void> sellGold(GoldTransaction lot, double quantity, double pricePerUnit, DateTime saleDate) async {
-    if (quantity <= 0 || quantity > lot.remainingQuantity) return;
-    final sale = SaleTransaction(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      lotId: lot.id,
-      saleDate: saleDate,
-      salePricePerUnit: pricePerUnit,
-      quantity: quantity,
-      isGold: true,
-      purchasePricePerUnit: lot.purchasePricePerUnit,
-      purchaseDate: lot.purchaseDate,
-    );
-    lot.remainingQuantity -= quantity;
-    await saleBox.add(sale);
-    if (lot.remainingQuantity <= 0.0001) await lot.delete();
-    else await lot.save();
-    notifyListeners();
-  }
-
-  Future<void> sellCoin(CoinTransaction lot, int count, double pricePerUnit, DateTime saleDate) async {
-    if (count <= 0 || count > lot.remainingCount) return;
-    final sale = SaleTransaction(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      lotId: lot.id,
-      saleDate: saleDate,
-      salePricePerUnit: pricePerUnit,
-      quantity: count.toDouble(),
-      isGold: false,
-      coinType: lot.coinType,
-      purchasePricePerUnit: lot.purchasePricePerUnit,
-      purchaseDate: lot.purchaseDate,
-    );
-    lot.remainingCount -= count;
-    await saleBox.add(sale);
-    if (lot.remainingCount == 0) await lot.delete();
-    else await lot.save();
-    notifyListeners();
-  }
-
-  double get totalRealizedProfit {
-    double profit = 0;
-    for (var sale in saleBox.values) {
-      profit += (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
-    }
-    return profit;
-  }
-
-  double getSaleProfit(SaleTransaction sale) {
-    return (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
-  }
-
-  double getRealizedProfitUntil(DateTime date) {
-    double profit = 0;
-    final endOfDay = date.add(const Duration(days: 1));
-    for (var sale in saleBox.values) {
-      if (sale.saleDate.isBefore(endOfDay)) {
-        profit += (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
-      }
-    }
-    return profit;
-  }
-
-  double getUnrealizedProfit(Map<String, double> currentPrices, double interestRate) {
-    double profit = 0;
-    for (var g in activeGold) {
-      final cp = currentPrices[g.type] ?? 0;
-      final paid = g.purchasePricePerUnit * g.remainingQuantity;
-      final days = Calculator.daysBetween(g.purchaseDate, DateTime.now());
-      profit += Calculator.calculateProfit(
-        currentPrice: cp,
-        purchasePrice: g.purchasePricePerUnit,
-        quantity: g.remainingQuantity,
-        paidAmount: paid,
-        interestRate: interestRate,
-        days: days,
-      );
-    }
-    for (var c in activeCoins) {
-      final cp = currentPrices[c.coinType] ?? 0;
-      final paid = c.purchasePricePerUnit * c.remainingCount;
-      final days = Calculator.daysBetween(c.purchaseDate, DateTime.now());
-      profit += Calculator.calculateProfit(
-        currentPrice: cp,
-        purchasePrice: c.purchasePricePerUnit,
-        quantity: c.remainingCount.toDouble(),
-        paidAmount: paid,
-        interestRate: interestRate,
-        days: days,
-      );
-    }
-    return profit;
-  }
-
-  double getProfitFromDate(DateTime startDate, double bankRate, Map<String, double> basePrices, Map<String, double> currentPrices) {
-    double currentValue = 0;
-    for (var g in activeGold) {
-      final cp = currentPrices[g.type] ?? 0;
-      currentValue += cp * g.remainingQuantity;
-    }
-    for (var c in activeCoins) {
-      final cp = currentPrices[c.coinType] ?? 0;
-      currentValue += cp * c.remainingCount;
-    }
-
-    double totalSaleProceeds = 0;
-    for (var sale in saleBox.values) {
-      if (sale.saleDate.isAfter(startDate)) {
-        totalSaleProceeds += sale.salePricePerUnit * sale.quantity;
-      }
-    }
-
-    double totalPurchaseCostAfter = 0;
-    for (var g in goldBox.values) {
-      if (g.purchaseDate.isAfter(startDate)) {
-        totalPurchaseCostAfter += g.purchasePricePerUnit * g.quantity;
-      }
-    }
-    for (var c in coinBox.values) {
-      if (c.purchaseDate.isAfter(startDate)) {
-        totalPurchaseCostAfter += c.purchasePricePerUnit * c.count;
-      }
-    }
-
-    double startValue = 0;
-    for (var g in goldBox.values) {
-      double qtyAtStart = g.quantity;
-      for (var sale in saleBox.values) {
-        if (sale.lotId == g.id && sale.isGold && sale.saleDate.isBefore(startDate)) {
-          qtyAtStart -= sale.quantity;
-        }
-      }
-      if (qtyAtStart > 0) {
-        final basePrice = basePrices[g.type] ?? 0;
-        startValue += basePrice * qtyAtStart;
-      }
-    }
-    for (var c in coinBox.values) {
-      int countAtStart = c.count;
-      for (var sale in saleBox.values) {
-        if (sale.lotId == c.id && !sale.isGold && sale.saleDate.isBefore(startDate)) {
-          countAtStart -= sale.quantity.toInt();
-        }
-      }
-      if (countAtStart > 0) {
-        final basePrice = basePrices[c.coinType] ?? 0;
-        startValue += basePrice * countAtStart;
-      }
-    }
-
-    double bankInterest = 0;
-    for (var g in goldBox.values) {
-      double remaining = g.remainingQuantity;
-      if (remaining > 0) {
-        final paid = g.purchasePricePerUnit * remaining;
-        final days = Calculator.daysBetween(g.purchaseDate, DateTime.now());
-        bankInterest += paid * (pow(1 + bankRate / 100, days / 365.0) - 1);
-      }
-      for (var sale in saleBox.values) {
-        if (sale.lotId == g.id && sale.isGold) {
-          final paid = g.purchasePricePerUnit * sale.quantity;
-          final days = Calculator.daysBetween(g.purchaseDate, sale.saleDate);
-          bankInterest += paid * (pow(1 + bankRate / 100, days / 365.0) - 1);
-        }
-      }
-    }
-    for (var c in coinBox.values) {
-      int remaining = c.remainingCount;
-      if (remaining > 0) {
-        final paid = c.purchasePricePerUnit * remaining;
-        final days = Calculator.daysBetween(c.purchaseDate, DateTime.now());
-        bankInterest += paid * (pow(1 + bankRate / 100, days / 365.0) - 1);
-      }
-      for (var sale in saleBox.values) {
-        if (sale.lotId == c.id && !sale.isGold) {
-          final paid = c.purchasePricePerUnit * sale.quantity;
-          final days = Calculator.daysBetween(c.purchaseDate, sale.saleDate);
-          bankInterest += paid * (pow(1 + bankRate / 100, days / 365.0) - 1);
-        }
-      }
-    }
-
-    double profit = (currentValue + totalSaleProceeds) - (totalPurchaseCostAfter + startValue) - bankInterest;
-    return profit;
-  }
-
-  Future<Map<String, dynamic>> exportAllData() async {
-    final goldData = goldBox.values.map((g) => {
-      'id': g.id,
-      'type': g.type,
-      'purchaseDate': g.purchaseDate.toIso8601String(),
-      'purchasePricePerUnit': g.purchasePricePerUnit,
-      'quantity': g.quantity,
-      'description': g.description,
-      'remainingQuantity': g.remainingQuantity,
-    }).toList();
-    final coinData = coinBox.values.map((c) => {
-      'id': c.id,
-      'coinType': c.coinType,
-      'purchaseDate': c.purchaseDate.toIso8601String(),
-      'purchasePricePerUnit': c.purchasePricePerUnit,
-      'count': c.count,
-      'description': c.description,
-      'remainingCount': c.remainingCount,
-    }).toList();
-    final saleData = saleBox.values.map((s) => {
-      'id': s.id,
-      'lotId': s.lotId,
-      'saleDate': s.saleDate.toIso8601String(),
-      'salePricePerUnit': s.salePricePerUnit,
-      'quantity': s.quantity,
-      'isGold': s.isGold,
-      'coinType': s.coinType,
-      'purchasePricePerUnit': s.purchasePricePerUnit,
-      'purchaseDate': s.purchaseDate.toIso8601String(),
-    }).toList();
-    return {
-      'goldTransactions': goldData,
-      'coinTransactions': coinData,
-      'saleTransactions': saleData,
-      'exportDate': DateTime.now().toIso8601String(),
-    };
-  }
-
-  Future<void> importData(Map<String, dynamic> data) async {
-    await goldBox.clear();
-    await coinBox.clear();
-    await saleBox.clear();
-
-    final goldList = data['goldTransactions'] as List? ?? [];
-    for (var item in goldList) {
-      final g = GoldTransaction(
-        id: item['id'],
-        type: item['type'],
-        purchaseDate: DateTime.parse(item['purchaseDate']),
-        purchasePricePerUnit: (item['purchasePricePerUnit'] as num).toDouble(),
-        quantity: (item['quantity'] as num).toDouble(),
-        description: item['description'] ?? '',
-        remainingQuantity: (item['remainingQuantity'] as num).toDouble(),
-      );
-      await goldBox.add(g);
-    }
-
-    final coinList = data['coinTransactions'] as List? ?? [];
-    for (var item in coinList) {
-      final c = CoinTransaction(
-        id: item['id'],
-        coinType: item['coinType'],
-        purchaseDate: DateTime.parse(item['purchaseDate']),
-        purchasePricePerUnit: (item['purchasePricePerUnit'] as num).toDouble(),
-        count: item['count'],
-        description: item['description'] ?? '',
-        remainingCount: item['remainingCount'],
-      );
-      await coinBox.add(c);
-    }
-
-    final saleList = data['saleTransactions'] as List? ?? [];
-    for (var item in saleList) {
-      final s = SaleTransaction(
-        id: item['id'],
-        lotId: item['lotId'],
-        saleDate: DateTime.parse(item['saleDate']),
-        salePricePerUnit: (item['salePricePerUnit'] as num).toDouble(),
-        quantity: (item['quantity'] as num).toDouble(),
-        isGold: item['isGold'],
-        coinType: item['coinType'],
-        purchasePricePerUnit: (item['purchasePricePerUnit'] as num).toDouble(),
-        purchaseDate: DateTime.parse(item['purchaseDate']),
-      );
-      await saleBox.add(s);
-    }
-    notifyListeners();
-  }
-}
-
-// ======================== صفحات (بدون استفاده از Glass به جز نوار پایین) ========================
+import 'logic.dart';
+import 'handler.dart';
 
 // -------------------- صفحه اصلی (HomeScreen) --------------------
 class HomeScreen extends StatelessWidget {
@@ -949,17 +51,48 @@ class HomeScreen extends StatelessWidget {
     final totalAssets = totalGoldValue + totalCoinValue;
     final realizedProfit = dataProvider.totalRealizedProfit;
     final unrealizedProfit = dataProvider.getUnrealizedProfit(
-      priceProvider.prices.map((k,v) => MapEntry(k, v.currentPrice ?? 0)),
+      priceProvider.prices.map((k, v) => MapEntry(k, v.currentPrice ?? 0)),
       settings.bankInterestRate,
+      deductBankInterest: true,
     );
 
-    final realized1404 = dataProvider.getRealizedProfitUntil(endOf1404);
+    // محاسبه سود محقق شده پایان ۱۴۰۴ (با سود روزشمار)
+    double realized1404 = 0;
+    for (var g in dataProvider.goldBox.values) {
+      if (g.purchaseDate.isAfter(endOf1404)) continue;
+      final endPrice = basePrices[g.type] ?? 0;
+      final paidAmount = g.purchasePricePerUnit * g.quantity;
+      final days = Calculator.daysBetween(g.purchaseDate, endOf1404);
+      final currentValue = endPrice * g.quantity;
+      final bankProfit = Calculator.dailyBankProfit(
+        paidAmount: paidAmount,
+        interestRate: settings.bankInterestRate,
+        days: days,
+      );
+      realized1404 += (currentValue - paidAmount) - bankProfit;
+    }
+    for (var c in dataProvider.coinBox.values) {
+      if (c.purchaseDate.isAfter(endOf1404)) continue;
+      final endPrice = basePrices[c.coinType] ?? 0;
+      final paidAmount = c.purchasePricePerUnit * c.count;
+      final days = Calculator.daysBetween(c.purchaseDate, endOf1404);
+      final currentValue = endPrice * c.count;
+      final bankProfit = Calculator.dailyBankProfit(
+        paidAmount: paidAmount,
+        interestRate: settings.bankInterestRate,
+        days: days,
+      );
+      realized1404 += (currentValue - paidAmount) - bankProfit;
+    }
 
+    // محاسبه عملکرد از ابتدای ۱۴۰۵ (با استفاده از متد اصلاح‌شده)
     final profitFrom1405 = dataProvider.getProfitFromDate(
       startOf1405,
       settings.bankInterestRate,
       basePrices,
-      priceProvider.prices.map((k,v) => MapEntry(k, v.currentPrice ?? 0)),
+      priceProvider.prices.map((k, v) => MapEntry(k, v.currentPrice ?? 0)),
+      deductBankInterest: true,
+      usePurchasePriceForStartValue: true,
     );
 
     final priceEntries = priceProvider.prices.entries
@@ -968,19 +101,11 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('خلاصه دارایی'),
+        title: const Text('خلاصه دارایی', style: TextStyle(color: Colors.black87)),
         centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colors.blue.shade900, Colors.purple.shade800, Colors.deepPurple.shade900],
-            ),
-          ),
-        ),
+        backgroundColor: Colors.white,
+        elevation: 1,
+        iconTheme: const IconThemeData(color: Colors.black87),
       ),
       body: RefreshIndicator(
         onRefresh: priceProvider.fetchPrices,
@@ -1166,26 +291,18 @@ class ReportsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('گزارش خرید و فروش'),
+        title: const Text('گزارش خرید و فروش', style: TextStyle(color: Colors.black87)),
         centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colors.blue.shade900, Colors.purple.shade800, Colors.deepPurple.shade900],
-            ),
-          ),
-        ),
+        backgroundColor: Colors.white,
+        elevation: 1,
+        iconTheme: const IconThemeData(color: Colors.black87),
         actions: [
           IconButton(
-            icon: const Icon(Icons.picture_as_pdf),
+            icon: const Icon(Icons.picture_as_pdf, color: Colors.black87),
             onPressed: () => _generatePDF(context, reportItems, totalProfit),
           ),
           IconButton(
-            icon: const Icon(Icons.share),
+            icon: const Icon(Icons.share, color: Colors.black87),
             onPressed: () => _shareReport(context, reportItems, totalProfit),
           ),
         ],
@@ -1377,22 +494,14 @@ class _GoldListScreenState extends State<GoldListScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('طلای آب شده'),
+        title: const Text('طلای آب شده', style: TextStyle(color: Colors.black87)),
         centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colors.blue.shade900, Colors.purple.shade800, Colors.deepPurple.shade900],
-            ),
-          ),
-        ),
+        backgroundColor: Colors.white,
+        elevation: 1,
+        iconTheme: const IconThemeData(color: Colors.black87),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
+            icon: const Icon(Icons.add, color: Colors.black87),
             onPressed: () => _showAddEditGoldDialog(context, null),
           ),
         ],
@@ -1567,114 +676,119 @@ class _GoldListScreenState extends State<GoldListScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            return Directionality(
-              textDirection: TextDirection.rtl,
-              child: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      existing == null ? 'افزودن طلای آب شده' : 'ویرایش',
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 16),
-                    NumberInputWithToman(
-                      label: 'فی خرید (ریال)',
-                      initialValue: price == 0 ? '' : formatWithSeparator(price),
-                      onSaved: (v) => price = double.parse(v),
-                      validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
-                    ),
-                    TextFormField(
-                      initialValue: weight == 0 ? '' : formatDoubleWithoutTrailingZeros(weight),
-                      decoration: const InputDecoration(labelText: 'وزن (گرم)'),
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.left,
-                      textDirection: TextDirection.ltr,
-                      validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
-                      onSaved: (v) => weight = double.parse(v!),
-                    ),
-                    ListTile(
-                      title: Text('تاریخ خرید: ${formatJalaliDate(selectedDate)}'),
-                      trailing: const Icon(Icons.calendar_today),
-                      onTap: () async {
-                        final picked = await pickJalaliDate(context, selectedDate);
-                        if (picked != null) {
-                          setState(() {
-                            selectedDate = picked;
-                          });
-                        }
-                      },
-                    ),
-                    TextFormField(
-                      initialValue: desc,
-                      decoration: const InputDecoration(labelText: 'توضیحات'),
-                      textAlign: TextAlign.right,
-                      textDirection: TextDirection.rtl,
-                      onSaved: (v) => desc = v ?? '',
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SingleChildScrollView(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                return Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('لغو'),
+                        Text(
+                          existing == null ? 'افزودن طلای آب شده' : 'ویرایش',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                         ),
-                        const SizedBox(width: 8),
-                        ElevatedButton(
-                          onPressed: () {
-                            if (formKey.currentState!.validate()) {
-                              formKey.currentState!.save();
-                              if (existing == null) {
-                                Provider.of<DataProvider>(context, listen: false).addGold(GoldTransaction(
-                                  id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                  type: 'gold_18',
-                                  purchaseDate: selectedDate,
-                                  purchasePricePerUnit: price,
-                                  quantity: weight,
-                                  description: desc,
-                                ));
-                              } else {
-                                double sold = 0;
-                                for (var sale in Provider.of<DataProvider>(context, listen: false).saleBox.values) {
-                                  if (sale.lotId == existing.id && sale.isGold) {
-                                    sold += sale.quantity;
-                                  }
-                                }
-                                double newRemaining = weight - sold;
-                                if (newRemaining < 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('وزن جدید کمتر از مقدار فروخته شده است!')),
-                                  );
-                                  return;
-                                }
-                                existing.purchaseDate = selectedDate;
-                                existing.purchasePricePerUnit = price;
-                                existing.quantity = weight;
-                                existing.remainingQuantity = newRemaining;
-                                existing.description = desc;
-                                Provider.of<DataProvider>(context, listen: false).updateGold(existing);
-                              }
-                              Navigator.pop(context);
+                        const SizedBox(height: 16),
+                        NumberInputWithToman(
+                          label: 'فی خرید (ریال)',
+                          initialValue: price == 0 ? '' : formatWithSeparator(price),
+                          onSaved: (v) => price = double.parse(v),
+                          validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
+                        ),
+                        TextFormField(
+                          initialValue: weight == 0 ? '' : formatDoubleWithoutTrailingZeros(weight),
+                          decoration: const InputDecoration(labelText: 'وزن (گرم)'),
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.left,
+                          textDirection: TextDirection.ltr,
+                          validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
+                          onSaved: (v) => weight = double.parse(v!),
+                        ),
+                        ListTile(
+                          title: Text('تاریخ خرید: ${formatJalaliDate(selectedDate)}'),
+                          trailing: const Icon(Icons.calendar_today),
+                          onTap: () async {
+                            final picked = await pickJalaliDate(context, selectedDate);
+                            if (picked != null) {
+                              setState(() {
+                                selectedDate = picked;
+                              });
                             }
                           },
-                          child: const Text('ذخیره'),
+                        ),
+                        TextFormField(
+                          initialValue: desc,
+                          decoration: const InputDecoration(labelText: 'توضیحات'),
+                          textAlign: TextAlign.right,
+                          textDirection: TextDirection.rtl,
+                          onSaved: (v) => desc = v ?? '',
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('لغو'),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton(
+                              onPressed: () {
+                                if (formKey.currentState!.validate()) {
+                                  formKey.currentState!.save();
+                                  if (existing == null) {
+                                    Provider.of<DataProvider>(context, listen: false).addGold(GoldTransaction(
+                                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                      type: 'gold_18',
+                                      purchaseDate: selectedDate,
+                                      purchasePricePerUnit: price,
+                                      quantity: weight,
+                                      description: desc,
+                                    ));
+                                  } else {
+                                    double sold = 0;
+                                    for (var sale in Provider.of<DataProvider>(context, listen: false).saleBox.values) {
+                                      if (sale.lotId == existing.id && sale.isGold) {
+                                        sold += sale.quantity;
+                                      }
+                                    }
+                                    double newRemaining = weight - sold;
+                                    if (newRemaining < 0) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('وزن جدید کمتر از مقدار فروخته شده است!')),
+                                      );
+                                      return;
+                                    }
+                                    existing.purchaseDate = selectedDate;
+                                    existing.purchasePricePerUnit = price;
+                                    existing.quantity = weight;
+                                    existing.remainingQuantity = newRemaining;
+                                    existing.description = desc;
+                                    Provider.of<DataProvider>(context, listen: false).updateGold(existing);
+                                  }
+                                  Navigator.pop(context);
+                                }
+                              },
+                              child: const Text('ذخیره'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-            );
-          },
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -1692,79 +806,84 @@ class _GoldListScreenState extends State<GoldListScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            return Directionality(
-              textDirection: TextDirection.rtl,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'فروش طلا',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  Text('موجودی: ${formatDoubleWithoutTrailingZeros(lot.remainingQuantity)} گرم'),
-                  TextField(
-                    controller: qtyCtrl,
-                    decoration: const InputDecoration(labelText: 'مقدار فروش (گرم)'),
-                    keyboardType: TextInputType.number,
-                    textAlign: TextAlign.left,
-                    textDirection: TextDirection.ltr,
-                  ),
-                  NumberInputWithToman(
-                    label: 'قیمت فروش هر گرم (ریال)',
-                    initialValue: priceCtrl.text,
-                    onSaved: (v) => priceCtrl.text = v,
-                    isPrice: true,
-                  ),
-                  ListTile(
-                    title: Text('تاریخ فروش: ${formatJalaliDate(saleDate)}'),
-                    trailing: const Icon(Icons.calendar_today),
-                    onTap: () async {
-                      final picked = await pickJalaliDate(context, saleDate);
-                      if (picked != null) {
-                        setState(() {
-                          saleDate = picked;
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SingleChildScrollView(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                return Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('لغو'),
+                      const Text(
+                        'فروش طلا',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          final q = double.tryParse(qtyCtrl.text) ?? 0;
-                          final p = double.tryParse(priceCtrl.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
-                          if (q > 0 && q <= lot.remainingQuantity && p > 0) {
-                            Provider.of<DataProvider>(context, listen: false).sellGold(lot, q, p, saleDate);
-                            Navigator.pop(context);
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('مقدار یا قیمت نامعتبر است')),
-                            );
+                      const SizedBox(height: 16),
+                      Text('موجودی: ${formatDoubleWithoutTrailingZeros(lot.remainingQuantity)} گرم'),
+                      TextField(
+                        controller: qtyCtrl,
+                        decoration: const InputDecoration(labelText: 'مقدار فروش (گرم)'),
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.left,
+                        textDirection: TextDirection.ltr,
+                      ),
+                      NumberInputWithToman(
+                        label: 'قیمت فروش هر گرم (ریال)',
+                        initialValue: priceCtrl.text,
+                        onSaved: (v) => priceCtrl.text = v,
+                        isPrice: true,
+                      ),
+                      ListTile(
+                        title: Text('تاریخ فروش: ${formatJalaliDate(saleDate)}'),
+                        trailing: const Icon(Icons.calendar_today),
+                        onTap: () async {
+                          final picked = await pickJalaliDate(context, saleDate);
+                          if (picked != null) {
+                            setState(() {
+                              saleDate = picked;
+                            });
                           }
                         },
-                        child: const Text('فروش'),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('لغو'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () {
+                              final q = double.tryParse(qtyCtrl.text) ?? 0;
+                              final p = double.tryParse(priceCtrl.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
+                              if (q > 0 && q <= lot.remainingQuantity && p > 0) {
+                                Provider.of<DataProvider>(context, listen: false).sellGold(lot, q, p, saleDate);
+                                Navigator.pop(context);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('مقدار یا قیمت نامعتبر است')),
+                                );
+                              }
+                            },
+                            child: const Text('فروش'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
-            );
-          },
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -1792,22 +911,14 @@ class _CoinListScreenState extends State<CoinListScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('سکه‌ها'),
+        title: const Text('سکه‌ها', style: TextStyle(color: Colors.black87)),
         centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colors.blue.shade900, Colors.purple.shade800, Colors.deepPurple.shade900],
-            ),
-          ),
-        ),
+        backgroundColor: Colors.white,
+        elevation: 1,
+        iconTheme: const IconThemeData(color: Colors.black87),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
+            icon: const Icon(Icons.add, color: Colors.black87),
             onPressed: () => _showAddEditCoinDialog(context, null),
           ),
         ],
@@ -1984,127 +1095,132 @@ class _CoinListScreenState extends State<CoinListScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            return Directionality(
-              textDirection: TextDirection.rtl,
-              child: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      existing == null ? 'افزودن سکه' : 'ویرایش',
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(
-                      value: coinType,
-                      items: const [
-                        DropdownMenuItem(value: 'coin_new', child: Text('تمام (امامی)')),
-                        DropdownMenuItem(value: 'coin_old', child: Text('تمام (قدیم)')),
-                        DropdownMenuItem(value: 'coin_half', child: Text('نیم سکه')),
-                        DropdownMenuItem(value: 'coin_quarter', child: Text('ربع سکه')),
-                        DropdownMenuItem(value: 'coin_1g', child: Text('سکه یک گرمی')),
-                      ],
-                      onChanged: (v) => coinType = v!,
-                      decoration: const InputDecoration(labelText: 'نوع سکه'),
-                    ),
-                    NumberInputWithToman(
-                      label: 'فی خرید (ریال)',
-                      initialValue: price == 0 ? '' : formatWithSeparator(price),
-                      onSaved: (v) => price = double.parse(v),
-                      validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
-                    ),
-                    TextFormField(
-                      initialValue: count == 0 ? '' : count.toString(),
-                      decoration: const InputDecoration(labelText: 'تعداد'),
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.left,
-                      textDirection: TextDirection.ltr,
-                      validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
-                      onSaved: (v) => count = int.parse(v!),
-                    ),
-                    ListTile(
-                      title: Text('تاریخ خرید: ${formatJalaliDate(selectedDate)}'),
-                      trailing: const Icon(Icons.calendar_today),
-                      onTap: () async {
-                        final picked = await pickJalaliDate(context, selectedDate);
-                        if (picked != null) {
-                          setState(() {
-                            selectedDate = picked;
-                          });
-                        }
-                      },
-                    ),
-                    TextFormField(
-                      initialValue: desc,
-                      decoration: const InputDecoration(labelText: 'توضیحات'),
-                      textAlign: TextAlign.right,
-                      textDirection: TextDirection.rtl,
-                      onSaved: (v) => desc = v ?? '',
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SingleChildScrollView(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                return Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('لغو'),
+                        Text(
+                          existing == null ? 'افزودن سکه' : 'ویرایش',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                         ),
-                        const SizedBox(width: 8),
-                        ElevatedButton(
-                          onPressed: () {
-                            if (formKey.currentState!.validate()) {
-                              formKey.currentState!.save();
-                              if (existing == null) {
-                                Provider.of<DataProvider>(context, listen: false).addCoin(CoinTransaction(
-                                  id: DateTime.now().millisecondsSinceEpoch.toString(),
-                                  coinType: coinType,
-                                  purchaseDate: selectedDate,
-                                  purchasePricePerUnit: price,
-                                  count: count,
-                                  description: desc,
-                                ));
-                              } else {
-                                int sold = 0;
-                                for (var sale in Provider.of<DataProvider>(context, listen: false).saleBox.values) {
-                                  if (sale.lotId == existing.id && !sale.isGold) {
-                                    sold += sale.quantity.toInt();
-                                  }
-                                }
-                                int newRemaining = count - sold;
-                                if (newRemaining < 0) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('تعداد جدید کمتر از تعداد فروخته شده است!')),
-                                  );
-                                  return;
-                                }
-                                existing.coinType = coinType;
-                                existing.purchaseDate = selectedDate;
-                                existing.purchasePricePerUnit = price;
-                                existing.count = count;
-                                existing.remainingCount = newRemaining;
-                                existing.description = desc;
-                                Provider.of<DataProvider>(context, listen: false).updateCoin(existing);
-                              }
-                              Navigator.pop(context);
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          value: coinType,
+                          items: const [
+                            DropdownMenuItem(value: 'coin_new', child: Text('تمام (امامی)')),
+                            DropdownMenuItem(value: 'coin_old', child: Text('تمام (قدیم)')),
+                            DropdownMenuItem(value: 'coin_half', child: Text('نیم سکه')),
+                            DropdownMenuItem(value: 'coin_quarter', child: Text('ربع سکه')),
+                            DropdownMenuItem(value: 'coin_1g', child: Text('سکه یک گرمی')),
+                          ],
+                          onChanged: (v) => coinType = v!,
+                          decoration: const InputDecoration(labelText: 'نوع سکه'),
+                        ),
+                        NumberInputWithToman(
+                          label: 'فی خرید (ریال)',
+                          initialValue: price == 0 ? '' : formatWithSeparator(price),
+                          onSaved: (v) => price = double.parse(v),
+                          validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
+                        ),
+                        TextFormField(
+                          initialValue: count == 0 ? '' : count.toString(),
+                          decoration: const InputDecoration(labelText: 'تعداد'),
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.left,
+                          textDirection: TextDirection.ltr,
+                          validator: (v) => v!.isEmpty ? 'وارد کنید' : null,
+                          onSaved: (v) => count = int.parse(v!),
+                        ),
+                        ListTile(
+                          title: Text('تاریخ خرید: ${formatJalaliDate(selectedDate)}'),
+                          trailing: const Icon(Icons.calendar_today),
+                          onTap: () async {
+                            final picked = await pickJalaliDate(context, selectedDate);
+                            if (picked != null) {
+                              setState(() {
+                                selectedDate = picked;
+                              });
                             }
                           },
-                          child: const Text('ذخیره'),
+                        ),
+                        TextFormField(
+                          initialValue: desc,
+                          decoration: const InputDecoration(labelText: 'توضیحات'),
+                          textAlign: TextAlign.right,
+                          textDirection: TextDirection.rtl,
+                          onSaved: (v) => desc = v ?? '',
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('لغو'),
+                            ),
+                            const SizedBox(width: 8),
+                            ElevatedButton(
+                              onPressed: () {
+                                if (formKey.currentState!.validate()) {
+                                  formKey.currentState!.save();
+                                  if (existing == null) {
+                                    Provider.of<DataProvider>(context, listen: false).addCoin(CoinTransaction(
+                                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                                      coinType: coinType,
+                                      purchaseDate: selectedDate,
+                                      purchasePricePerUnit: price,
+                                      count: count,
+                                      description: desc,
+                                    ));
+                                  } else {
+                                    int sold = 0;
+                                    for (var sale in Provider.of<DataProvider>(context, listen: false).saleBox.values) {
+                                      if (sale.lotId == existing.id && !sale.isGold) {
+                                        sold += sale.quantity.toInt();
+                                      }
+                                    }
+                                    int newRemaining = count - sold;
+                                    if (newRemaining < 0) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('تعداد جدید کمتر از تعداد فروخته شده است!')),
+                                      );
+                                      return;
+                                    }
+                                    existing.coinType = coinType;
+                                    existing.purchaseDate = selectedDate;
+                                    existing.purchasePricePerUnit = price;
+                                    existing.count = count;
+                                    existing.remainingCount = newRemaining;
+                                    existing.description = desc;
+                                    Provider.of<DataProvider>(context, listen: false).updateCoin(existing);
+                                  }
+                                  Navigator.pop(context);
+                                }
+                              },
+                              child: const Text('ذخیره'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-            );
-          },
+                  ),
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -2122,79 +1238,84 @@ class _CoinListScreenState extends State<CoinListScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: StatefulBuilder(
-          builder: (context, setState) {
-            return Directionality(
-              textDirection: TextDirection.rtl,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'فروش سکه',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  Text('موجودی: ${lot.remainingCount} عدد'),
-                  TextField(
-                    controller: cntCtrl,
-                    decoration: const InputDecoration(labelText: 'تعداد فروش'),
-                    keyboardType: TextInputType.number,
-                    textAlign: TextAlign.left,
-                    textDirection: TextDirection.ltr,
-                  ),
-                  NumberInputWithToman(
-                    label: 'قیمت فروش هر عدد (ریال)',
-                    initialValue: priceCtrl.text,
-                    onSaved: (v) => priceCtrl.text = v,
-                    isPrice: true,
-                  ),
-                  ListTile(
-                    title: Text('تاریخ فروش: ${formatJalaliDate(saleDate)}'),
-                    trailing: const Icon(Icons.calendar_today),
-                    onTap: () async {
-                      final picked = await pickJalaliDate(context, saleDate);
-                      if (picked != null) {
-                        setState(() {
-                          saleDate = picked;
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: SingleChildScrollView(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                return Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('لغو'),
+                      const Text(
+                        'فروش سکه',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          final n = int.tryParse(cntCtrl.text) ?? 0;
-                          final p = double.tryParse(priceCtrl.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
-                          if (n > 0 && n <= lot.remainingCount && p > 0) {
-                            Provider.of<DataProvider>(context, listen: false).sellCoin(lot, n, p, saleDate);
-                            Navigator.pop(context);
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('مقدار یا قیمت نامعتبر است')),
-                            );
+                      const SizedBox(height: 16),
+                      Text('موجودی: ${lot.remainingCount} عدد'),
+                      TextField(
+                        controller: cntCtrl,
+                        decoration: const InputDecoration(labelText: 'تعداد فروش'),
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.left,
+                        textDirection: TextDirection.ltr,
+                      ),
+                      NumberInputWithToman(
+                        label: 'قیمت فروش هر عدد (ریال)',
+                        initialValue: priceCtrl.text,
+                        onSaved: (v) => priceCtrl.text = v,
+                        isPrice: true,
+                      ),
+                      ListTile(
+                        title: Text('تاریخ فروش: ${formatJalaliDate(saleDate)}'),
+                        trailing: const Icon(Icons.calendar_today),
+                        onTap: () async {
+                          final picked = await pickJalaliDate(context, saleDate);
+                          if (picked != null) {
+                            setState(() {
+                              saleDate = picked;
+                            });
                           }
                         },
-                        child: const Text('فروش'),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('لغو'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () {
+                              final n = int.tryParse(cntCtrl.text) ?? 0;
+                              final p = double.tryParse(priceCtrl.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
+                              if (n > 0 && n <= lot.remainingCount && p > 0) {
+                                Provider.of<DataProvider>(context, listen: false).sellCoin(lot, n, p, saleDate);
+                                Navigator.pop(context);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('مقدار یا قیمت نامعتبر است')),
+                                );
+                              }
+                            },
+                            child: const Text('فروش'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
-            );
-          },
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -2302,19 +1423,11 @@ class ChartsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('نمودارها'),
+        title: const Text('نمودارها', style: TextStyle(color: Colors.black87)),
         centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colors.blue.shade900, Colors.purple.shade800, Colors.deepPurple.shade900],
-            ),
-          ),
-        ),
+        backgroundColor: Colors.white,
+        elevation: 1,
+        iconTheme: const IconThemeData(color: Colors.black87),
       ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: 100, left: 16, right: 16, top: 16),
@@ -2430,22 +1543,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تنظیمات'),
+        title: const Text('تنظیمات', style: TextStyle(color: Colors.black87)),
         centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colors.blue.shade900, Colors.purple.shade800, Colors.deepPurple.shade900],
-            ),
-          ),
-        ),
+        backgroundColor: Colors.white,
+        elevation: 1,
+        iconTheme: const IconThemeData(color: Colors.black87),
         actions: [
           IconButton(
-            icon: const Icon(Icons.receipt_long),
+            icon: const Icon(Icons.receipt_long, color: Colors.black87),
             onPressed: () {
               Navigator.push(
                 context,
@@ -2678,7 +1783,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // تنظیم شفافیت نوار ناوبری سیستم اندروید
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       systemNavigationBarColor: Colors.transparent,
@@ -2688,8 +1792,6 @@ void main() async {
   );
 
   await initializeDateFormatting('fa', null);
-
-  // ✅ مقداردهی اولیه Liquid Glass Widgets (برای نوار پایین)
   await LiquidGlassWidgets.initialize();
 
   final appDocDir = await path_provider.getApplicationDocumentsDirectory();
@@ -2731,7 +1833,7 @@ void main() async {
   );
 }
 
-// -------------------- صفحه اصلی با Navigation Bar شیشه‌ای (فقط نوار پایین) --------------------
+// -------------------- صفحه اصلی با Navigation Bar شیشه‌ای --------------------
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
