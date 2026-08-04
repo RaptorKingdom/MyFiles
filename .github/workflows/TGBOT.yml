@@ -1,0 +1,239 @@
+name: Forever Bot
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Forever Bot"]
+    types:
+      - completed
+
+concurrency:
+  group: forever-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360             # ۶ ساعت (برای اطمینان)
+    env:
+      TOKEN: ${{ secrets.TOKEN }}
+      UPLOAD_DIR: /tmp/uploads
+      TOTAL_DURATION: 18000          # ۵ ساعت (ثانیه)
+      CHECK_INTERVAL: 30             # ثانیه
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install python-telegram-bot==20.7
+
+      - name: Create upload directory
+        run: mkdir -p ${{ env.UPLOAD_DIR }}
+
+      - name: Write bot script
+        run: |
+          cat << 'EOF' > bot.py
+          import os
+          import asyncio
+          import time
+          import threading
+          import logging
+          from datetime import datetime, timedelta
+          from pathlib import Path
+          from telegram import Update
+          from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+          # ========== تنظیمات از محیط ==========
+          TOKEN = os.environ['TOKEN']
+          UPLOAD_DIR = Path(os.environ.get('UPLOAD_DIR', '/tmp/uploads'))
+          UPLOAD_DIR.mkdir(exist_ok=True)
+          TUNNEL_URL_FILE = Path('tunnel-url.txt')
+
+          # مدت اعتبار هر فایل (۲ ساعت)
+          EXPIRY_DURATION = timedelta(seconds=7200)
+
+          # ========== وضعیت فایل‌ها ==========
+          file_expiry = {}   # filename -> datetime انقضا
+
+          logging.basicConfig(level=logging.INFO)
+          logger = logging.getLogger(__name__)
+
+          def get_tunnel_url():
+              """خواندن آخرین آدرس تونل از فایل"""
+              if TUNNEL_URL_FILE.exists():
+                  return TUNNEL_URL_FILE.read_text().strip()
+              return None
+
+          # ========== تابع پاک‌کننده ==========
+          def cleaner():
+              while True:
+                  now = datetime.now()
+                  to_delete = [f for f, exp in file_expiry.items() if exp < now]
+                  for f in to_delete:
+                      fp = UPLOAD_DIR / f
+                      if fp.exists():
+                          fp.unlink()
+                          logger.info(f"Deleted expired file: {f}")
+                      del file_expiry[f]
+                  time.sleep(60)
+
+          # ========== هندلرهای ربات ==========
+          async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              await update.message.reply_text(
+                  "👋 سلام! فایل، عکس یا ویدیو بفرستید تا لینک دریافت کنید.\n"
+                  f"⏳ هر لینک به مدت {EXPIRY_DURATION.seconds//3600} ساعت معتبر است."
+              )
+
+          async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+              # بررسی وجود تونل
+              base_url = get_tunnel_url()
+              if not base_url:
+                  await update.message.reply_text("❌ متأسفانه سرویس دهی موقتاً در دسترس نیست. لطفاً لحظاتی بعد تلاش کنید.")
+                  return
+
+              # تشخیص نوع فایل
+              doc = update.message.document
+              photo = update.message.photo
+              video = update.message.video
+              if doc:
+                  file_obj = doc
+                  ext = os.path.splitext(doc.file_name)[1] if doc.file_name else '.bin'
+                  fname = f"{int(time.time())}_{doc.file_unique_id}{ext}"
+              elif photo:
+                  file_obj = photo[-1]
+                  ext = '.jpg'
+                  fname = f"{int(time.time())}_{file_obj.file_unique_id}{ext}"
+              elif video:
+                  file_obj = video
+                  ext = '.mp4'
+                  fname = f"{int(time.time())}_{file_obj.file_unique_id}{ext}"
+              else:
+                  await update.message.reply_text("❌ فرمت پشتیبانی نمی‌شود. فقط فایل، عکس و ویدیو.")
+                  return
+
+              file_path = UPLOAD_DIR / fname
+
+              # دانلود فایل
+              try:
+                  new_file = await file_obj.get_file()
+                  await new_file.download_to_drive(file_path)
+              except Exception as e:
+                  logger.error(f"Download error: {e}")
+                  await update.message.reply_text("❌ خطا در دانلود فایل.")
+                  return
+
+              # ثبت زمان انقضا
+              expiry_time = datetime.now() + EXPIRY_DURATION
+              file_expiry[fname] = expiry_time
+
+              # ساخت لینک
+              link = f"{base_url}/{fname}"
+              await update.message.reply_text(
+                  f"✅ فایل ذخیره شد.\n"
+                  f"🔗 لینک: {link}\n"
+                  f"⏳ اعتبار تا: {expiry_time.strftime('%Y-%m-%d %H:%M:%S')}"
+              )
+
+          # ========== اجرای اصلی ==========
+          def main():
+              # شروع ترد پاک‌کننده
+              t = threading.Thread(target=cleaner, daemon=True)
+              t.start()
+
+              app = Application.builder().token(TOKEN).build()
+              app.add_handler(CommandHandler("start", start))
+              app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file))
+
+              logger.info("ربات شروع به کار کرد.")
+              app.run_polling()
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+      - name: Start web server
+        run: |
+          cd ${{ env.UPLOAD_DIR }}
+          python3 -m http.server 8080 &
+          echo $! > /tmp/webserver.pid
+
+      - name: Install cloudflared & initial tunnel
+        run: |
+          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+          ./cloudflared tunnel --url http://localhost:8080 --no-autoupdate > cloudflare.log 2>&1 &
+          sleep 8
+          TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ خطا در دریافت آدرس تونل"
+            cat cloudflare.log
+            exit 1
+          fi
+          echo "$TUNNEL_URL" > tunnel-url.txt
+          echo "✅ تونل ایجاد شد: $TUNNEL_URL"
+
+      - name: Run bot in background
+        run: |
+          python3 bot.py &
+          echo $! > /tmp/bot.pid
+
+      - name: Keep alive (5 hours) with tunnel monitoring
+        run: |
+          set +e  # جلوگیری از خروج در صورت خطا
+          END_TIME=$(( $(date +%s) + ${{ env.TOTAL_DURATION }} ))
+          echo "⏳ نگهبانی به مدت ۵ ساعت..."
+          
+          while [ $(date +%s) -lt $END_TIME ]; do
+            # ===== بررسی سلامت تونل =====
+            TUNNEL_URL=$(cat tunnel-url.txt 2>/dev/null)
+            if [ -n "$TUNNEL_URL" ]; then
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$TUNNEL_URL" 2>/dev/null || echo "000")
+              if [ "$HTTP_CODE" != "200" ]; then
+                echo "⚠️ تونل پاسخ نمی‌دهد (کد: $HTTP_CODE) - راه‌اندازی مجدد..."
+                pkill cloudflared || true
+                sleep 2
+                ./cloudflared tunnel --url http://localhost:8080 --no-autoupdate > cloudflare.log 2>&1 &
+                sleep 8
+                NEW_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
+                if [ -n "$NEW_URL" ]; then
+                  echo "$NEW_URL" > tunnel-url.txt
+                  echo "🔄 آدرس جدید تونل: $NEW_URL"
+                else
+                  echo "❌ راه‌اندازی مجدد تونل ناموفق"
+                fi
+              else
+                echo "✅ تونل سالم است (HTTP $HTTP_CODE)"
+              fi
+            else
+              echo "⚠️ فایل آدرس تونل وجود ندارد - تلاش مجدد..."
+            fi
+
+            # ===== بررسی سلامت ربات =====
+            if ! kill -0 $(cat /tmp/bot.pid) 2>/dev/null; then
+              echo "⚠️ ربات متوقف شده - راه‌اندازی مجدد..."
+              python3 bot.py &
+              echo $! > /tmp/bot.pid
+            fi
+
+            # ===== نمایش زمان باقی‌مانده =====
+            REMAINING=$((END_TIME - $(date +%s)))
+            echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
+            
+            sleep ${{ env.CHECK_INTERVAL }}
+          done
+
+          echo "✅ زمان نگهبانی به پایان رسید."
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $(cat /tmp/bot.pid) 2>/dev/null || true
+          kill $(cat /tmp/webserver.pid) 2>/dev/null || true
+          pkill cloudflared || true
+          rm -rf ${{ env.UPLOAD_DIR }}/*
+          echo "🧹 پاک‌سازی انجام شد."
