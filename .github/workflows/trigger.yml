@@ -1,7 +1,7 @@
 name: Trigger Main Workflow
 
 on:
-  workflow_run:
+  workfl.ow_run:
     workflows: ["Forever Bot"]         # نام اصلی workflow
     types:
       - completed
