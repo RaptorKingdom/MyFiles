@@ -9,35 +9,31 @@ part 'logic.g.dart';
 
 // -------------------- Utility Calculator --------------------
 class Calculator {
-  /// محاسبه تعداد روز بین دو تاریخ با UTC برای جلوگیری از خطای DST
   static int daysBetween(DateTime from, DateTime to) {
     final f = DateTime.utc(from.year, from.month, from.day);
     final t = DateTime.utc(to.year, to.month, to.day);
     return t.difference(f).inDays;
   }
 
-  /// سود بانکی روزشمار
   static double dailyBankProfit({
     required double paidAmount,
     required double interestRate,
     required int days,
   }) {
     if (days <= 0 || paidAmount <= 0) return 0;
+
     final dailyRate = interestRate / 100 / 365;
-    return paidAmount * (pow(1 + dailyRate, days) - 1);
+    return (paidAmount * (pow(1 + dailyRate, days) - 1)).toDouble();
   }
 
-  /// سود/زیان خالص دارایی (بدون مقایسه با بانک)
   static double assetProfit({
     required double currentPrice,
     required double quantity,
     required double paidAmount,
   }) {
-    final currentValue = currentPrice * quantity;
-    return currentValue - paidAmount;
+    return currentPrice * quantity - paidAmount;
   }
 
-  /// سود دارایی منهای سود بانکی روزشمار (عملکرد نسبت به بانک)
   static double calculateProfit({
     required double currentPrice,
     required double purchasePrice,
@@ -48,11 +44,13 @@ class Calculator {
   }) {
     final currentValue = currentPrice * quantity;
     final purchaseProfit = currentValue - paidAmount;
+
     final bankProfit = dailyBankProfit(
       paidAmount: paidAmount,
       interestRate: interestRate,
       days: days,
     );
+
     return purchaseProfit - bankProfit;
   }
 }
@@ -69,9 +67,13 @@ class GoldTransaction extends HiveObject {
   @HiveField(6) double remainingQuantity;
 
   GoldTransaction({
-    required this.id, required this.type, required this.purchaseDate,
-    required this.purchasePricePerUnit, required this.quantity,
-    required this.description, double? remainingQuantity,
+    required this.id,
+    required this.type,
+    required this.purchaseDate,
+    required this.purchasePricePerUnit,
+    required this.quantity,
+    required this.description,
+    double? remainingQuantity,
   }) : remainingQuantity = remainingQuantity ?? quantity;
 }
 
@@ -86,9 +88,13 @@ class CoinTransaction extends HiveObject {
   @HiveField(6) int remainingCount;
 
   CoinTransaction({
-    required this.id, required this.coinType, required this.purchaseDate,
-    required this.purchasePricePerUnit, required this.count,
-    required this.description, int? remainingCount,
+    required this.id,
+    required this.coinType,
+    required this.purchaseDate,
+    required this.purchasePricePerUnit,
+    required this.count,
+    required this.description,
+    int? remainingCount,
   }) : remainingCount = remainingCount ?? count;
 }
 
@@ -105,9 +111,13 @@ class SaleTransaction extends HiveObject {
   @HiveField(8) DateTime purchaseDate;
 
   SaleTransaction({
-    required this.id, required this.lotId, required this.saleDate,
-    required this.salePricePerUnit, required this.quantity,
-    required this.isGold, this.coinType,
+    required this.id,
+    required this.lotId,
+    required this.saleDate,
+    required this.salePricePerUnit,
+    required this.quantity,
+    required this.isGold,
+    this.coinType,
     required this.purchasePricePerUnit,
     required this.purchaseDate,
   });
@@ -122,28 +132,42 @@ class PriceResponse {
   final double? yesterdayAvg;
   final Change? change;
 
-  PriceResponse({required this.name, this.currentPrice, this.high, this.low, this.yesterdayAvg, this.change});
+  PriceResponse({
+    required this.name,
+    this.currentPrice,
+    this.high,
+    this.low,
+    this.yesterdayAvg,
+    this.change,
+  });
 
   factory PriceResponse.fromJson(Map<String, dynamic> json) => PriceResponse(
-    name: json['name'] ?? '',
-    currentPrice: json['current_price'] != null ? (json['current_price'] as num).toDouble() : null,
-    high: json['high'] != null ? (json['high'] as num).toDouble() : null,
-    low: json['low'] != null ? (json['low'] as num).toDouble() : null,
-    yesterdayAvg: json['yesterday_avg'] != null ? (json['yesterday_avg'] as num).toDouble() : null,
-    change: json['change'] != null ? Change.fromJson(json['change']) : null,
-  );
+        name: json['name'] ?? '',
+        currentPrice: json['current_price'] != null
+            ? (json['current_price'] as num).toDouble()
+            : null,
+        high: json['high'] != null ? (json['high'] as num).toDouble() : null,
+        low: json['low'] != null ? (json['low'] as num).toDouble() : null,
+        yesterdayAvg: json['yesterday_avg'] != null
+            ? (json['yesterday_avg'] as num).toDouble()
+            : null,
+        change: json['change'] != null ? Change.fromJson(json['change']) : null,
+      );
 }
 
 class Change {
   final double? value;
   final double? percent;
   final String? direction;
+
   Change({this.value, this.percent, this.direction});
+
   factory Change.fromJson(Map<String, dynamic> json) => Change(
-    value: json['value'] != null ? (json['value'] as num).toDouble() : null,
-    percent: json['percent'] != null ? (json['percent'] as num).toDouble() : null,
-    direction: json['direction'],
-  );
+        value: json['value'] != null ? (json['value'] as num).toDouble() : null,
+        percent:
+            json['percent'] != null ? (json['percent'] as num).toDouble() : null,
+        direction: json['direction'],
+      );
 }
 
 // -------------------- Providers --------------------
@@ -151,31 +175,53 @@ class SettingsProvider extends ChangeNotifier {
   double _bankInterestRate = 26.0;
   int _autoUpdateInterval = 300;
   Color _secondaryColor = Colors.amber;
+
   double get bankInterestRate => _bankInterestRate;
   int get autoUpdateInterval => _autoUpdateInterval;
   Color get secondaryColor => _secondaryColor;
+
   final SharedPreferences _prefs;
-  SettingsProvider(this._prefs) { _loadSettings(); }
+
+  SettingsProvider(this._prefs) {
+    _loadSettings();
+  }
+
   void _loadSettings() {
     _bankInterestRate = _prefs.getDouble('bankInterestRate') ?? 26.0;
     _autoUpdateInterval = _prefs.getInt('autoUpdateInterval') ?? 300;
+
     final colorStr = _prefs.getString('secondaryColor');
     if (colorStr != null) {
       try {
-        _secondaryColor = Color(int.parse(colorStr));
+        if (colorStr.startsWith('#')) {
+          _secondaryColor = Color(int.parse(colorStr.substring(1), radix: 16));
+        } else {
+          _secondaryColor = Color(int.parse(colorStr));
+        }
       } catch (_) {}
     }
   }
-  Future<void> setBankInterestRate(double v) async { _bankInterestRate = v; await _prefs.setDouble('bankInterestRate', v); notifyListeners(); }
-  Future<void> setAutoUpdateInterval(int s) async { _autoUpdateInterval = s; await _prefs.setInt('autoUpdateInterval', s); notifyListeners(); }
+
+  Future<void> setBankInterestRate(double v) async {
+    _bankInterestRate = v;
+    await _prefs.setDouble('bankInterestRate', v);
+    notifyListeners();
+  }
+
+  Future<void> setAutoUpdateInterval(int s) async {
+    _autoUpdateInterval = s;
+    await _prefs.setInt('autoUpdateInterval', s);
+    notifyListeners();
+  }
+
   Future<void> setSecondaryColor(Color c) async {
     _secondaryColor = c;
-    await _prefs.setString('secondaryColor', c.value.toString());
+    final hexColor = '#${c.value.toRadixString(16).padLeft(8, '0')}';
+    await _prefs.setString('secondaryColor', hexColor);
     notifyListeners();
   }
 }
 
-/// BasePriceProvider با قابلیت ذخیره‌سازی در SharedPreferences
 class BasePriceProvider extends ChangeNotifier {
   Map<String, double> _basePrices = {};
   final SharedPreferences _prefs;
@@ -232,57 +278,89 @@ class DataProvider extends ChangeNotifier {
   final Box<CoinTransaction> coinBox;
   final Box<SaleTransaction> saleBox;
 
-  DataProvider({required this.goldBox, required this.coinBox, required this.saleBox}) {
+  DataProvider({
+    required this.goldBox,
+    required this.coinBox,
+    required this.saleBox,
+  }) {
     if (goldBox.isEmpty && coinBox.isEmpty) _addDefaultData();
   }
 
   void _addDefaultData() {
     goldBox.addAll([
-      GoldTransaction(id:'1',type:'gold_18',purchaseDate:DateTime(2025,1,2),purchasePricePerUnit:52518583,quantity:100,description:''),
-      GoldTransaction(id:'2',type:'gold_18',purchaseDate:DateTime(2025,2,9),purchasePricePerUnit:65792511,quantity:61.195,description:''),
-      GoldTransaction(id:'3',type:'gold_18',purchaseDate:DateTime(2025,4,13),purchasePricePerUnit:76180802,quantity:50,description:''),
-      GoldTransaction(id:'4',type:'gold_18',purchaseDate:DateTime(2025,10,6),purchasePricePerUnit:105960571,quantity:100,description:''),
-      GoldTransaction(id:'5',type:'gold_18',purchaseDate:DateTime(2025,11,10),purchasePricePerUnit:105730000,quantity:60,description:''),
-      GoldTransaction(id:'6',type:'gold_18',purchaseDate:DateTime(2025,12,14),purchasePricePerUnit:138048000,quantity:15,description:''),
+      GoldTransaction(id: '1', type: 'gold_18', purchaseDate: DateTime(2025, 1, 2), purchasePricePerUnit: 52518583, quantity: 100, description: ''),
+      GoldTransaction(id: '2', type: 'gold_18', purchaseDate: DateTime(2025, 2, 9), purchasePricePerUnit: 65792511, quantity: 61.195, description: ''),
+      GoldTransaction(id: '3', type: 'gold_18', purchaseDate: DateTime(2025, 4, 13), purchasePricePerUnit: 76180802, quantity: 50, description: ''),
+      GoldTransaction(id: '4', type: 'gold_18', purchaseDate: DateTime(2025, 10, 6), purchasePricePerUnit: 105960571, quantity: 100, description: ''),
+      GoldTransaction(id: '5', type: 'gold_18', purchaseDate: DateTime(2025, 11, 10), purchasePricePerUnit: 105730000, quantity: 60, description: ''),
+      GoldTransaction(id: '6', type: 'gold_18', purchaseDate: DateTime(2025, 12, 14), purchasePricePerUnit: 138048000, quantity: 15, description: ''),
     ]);
+
     coinBox.addAll([
-      CoinTransaction(id:'c1',coinType:'coin_quarter',purchaseDate:DateTime(2023,1,17),purchasePricePerUnit:70500000,count:3,description:'خرید از بورس کالای کارگزاری آگاه'),
-      CoinTransaction(id:'c2',coinType:'coin_new',purchaseDate:DateTime(2025,1,1),purchasePricePerUnit:560000000,count:2,description:'خرید از زهرا'),
-      CoinTransaction(id:'c3',coinType:'coin_quarter',purchaseDate:DateTime(2025,1,1),purchasePricePerUnit:174000000,count:1,description:'خرید از زهرا'),
-      CoinTransaction(id:'c4',coinType:'coin_new',purchaseDate:DateTime(2025,9,8),purchasePricePerUnit:832224932,count:6,description:'خرید از مرکز مبادلات سکه و ارز'),
-      CoinTransaction(id:'c5',coinType:'coin_half',purchaseDate:DateTime(2025,9,8),purchasePricePerUnit:441195425,count:10,description:'خرید از مرکز مبادلات سکه و ارز'),
-      CoinTransaction(id:'c6',coinType:'coin_quarter',purchaseDate:DateTime(2025,9,8),purchasePricePerUnit:257758617,count:14,description:'خرید از مرکز مبادلات سکه و ارز'),
-      CoinTransaction(id:'c7',coinType:'coin_half',purchaseDate:DateTime(2025,11,12),purchasePricePerUnit:575585000,count:1,description:'خرید از مرکز مبادلات کاربری مریم'),
-      CoinTransaction(id:'c8',coinType:'coin_quarter',purchaseDate:DateTime(2025,11,12),purchasePricePerUnit:327850000,count:2,description:'خرید از مرکز مبادلات کابری مریم'),
-      CoinTransaction(id:'c9',coinType:'coin_new',purchaseDate:DateTime(2026,2,15),purchasePricePerUnit:1930000000,count:4,description:'خرید از علی بابت پول ماشین'),
-      CoinTransaction(id:'c10',coinType:'coin_quarter',purchaseDate:DateTime(2026,2,15),purchasePricePerUnit:525000000,count:6,description:'خرید از علی بابت پول ماشین'),
-      CoinTransaction(id:'c11',coinType:'coin_half',purchaseDate:DateTime(2026,2,15),purchasePricePerUnit:970000000,count:3,description:'خرید از علی بابت پول ماشین'),
+      CoinTransaction(id: 'c1', coinType: 'coin_quarter', purchaseDate: DateTime(2023, 1, 17), purchasePricePerUnit: 70500000, count: 3, description: 'خرید از بورس کالای کارگزاری آگاه'),
+      CoinTransaction(id: 'c2', coinType: 'coin_new', purchaseDate: DateTime(2025, 1, 1), purchasePricePerUnit: 560000000, count: 2, description: 'خرید از زهرا'),
+      CoinTransaction(id: 'c3', coinType: 'coin_quarter', purchaseDate: DateTime(2025, 1, 1), purchasePricePerUnit: 174000000, count: 1, description: 'خرید از زهرا'),
+      CoinTransaction(id: 'c4', coinType: 'coin_new', purchaseDate: DateTime(2025, 9, 8), purchasePricePerUnit: 832224932, count: 6, description: 'خرید از مرکز مبادلات سکه و ارز'),
+      CoinTransaction(id: 'c5', coinType: 'coin_half', purchaseDate: DateTime(2025, 9, 8), purchasePricePerUnit: 441195425, count: 10, description: 'خرید از مرکز مبادلات سکه و ارز'),
+      CoinTransaction(id: 'c6', coinType: 'coin_quarter', purchaseDate: DateTime(2025, 9, 8), purchasePricePerUnit: 257758617, count: 14, description: 'خرید از مرکز مبادلات سکه و ارز'),
+      CoinTransaction(id: 'c7', coinType: 'coin_half', purchaseDate: DateTime(2025, 11, 12), purchasePricePerUnit: 575585000, count: 1, description: 'خرید از مرکز مبادلات کاربری مریم'),
+      CoinTransaction(id: 'c8', coinType: 'coin_quarter', purchaseDate: DateTime(2025, 11, 12), purchasePricePerUnit: 327850000, count: 2, description: 'خرید از مرکز مبادلات کابری مریم'),
+      CoinTransaction(id: 'c9', coinType: 'coin_new', purchaseDate: DateTime(2026, 2, 15), purchasePricePerUnit: 1930000000, count: 4, description: 'خرید از علی بابت پول ماشین'),
+      CoinTransaction(id: 'c10', coinType: 'coin_quarter', purchaseDate: DateTime(2026, 2, 15), purchasePricePerUnit: 525000000, count: 6, description: 'خرید از علی بابت پول ماشین'),
+      CoinTransaction(id: 'c11', coinType: 'coin_half', purchaseDate: DateTime(2026, 2, 15), purchasePricePerUnit: 970000000, count: 3, description: 'خرید از علی بابت پول ماشین'),
     ]);
   }
 
-  List<GoldTransaction> get activeGold => goldBox.values.where((g) => g.remainingQuantity > 0.0001).toList();
-  List<CoinTransaction> get activeCoins => coinBox.values.where((c) => c.remainingCount > 0).toList();
+  List<GoldTransaction> get activeGold =>
+      goldBox.values.where((g) => g.remainingQuantity > 0.0001).toList();
 
-  Future<void> addGold(GoldTransaction t) async { await goldBox.add(t); notifyListeners(); }
-  Future<void> updateGold(GoldTransaction t) async { await t.save(); notifyListeners(); }
+  List<CoinTransaction> get activeCoins =>
+      coinBox.values.where((c) => c.remainingCount > 0).toList();
+
+  Future<void> addGold(GoldTransaction t) async {
+    await goldBox.add(t);
+    notifyListeners();
+  }
+
+  Future<void> updateGold(GoldTransaction t) async {
+    await t.save();
+    notifyListeners();
+  }
+
   Future<void> deleteGold(GoldTransaction t) async {
-    final salesToDelete = saleBox.values.where((s) => s.lotId == t.id && s.isGold).toList();
-    for (var s in salesToDelete) await s.delete();
-    await t.delete();
-    notifyListeners();
-  }
-  Future<void> addCoin(CoinTransaction t) async { await coinBox.add(t); notifyListeners(); }
-  Future<void> updateCoin(CoinTransaction t) async { await t.save(); notifyListeners(); }
-  Future<void> deleteCoin(CoinTransaction t) async {
-    final salesToDelete = saleBox.values.where((s) => s.lotId == t.id && !s.isGold).toList();
+    final salesToDelete =
+        saleBox.values.where((s) => s.lotId == t.id && s.isGold).toList();
     for (var s in salesToDelete) await s.delete();
     await t.delete();
     notifyListeners();
   }
 
-  /// فروش طلا - لات حذف نمی‌شود، فقط remainingQuantity صفر می‌شود
-  Future<void> sellGold(GoldTransaction lot, double quantity, double pricePerUnit, DateTime saleDate) async {
+  Future<void> addCoin(CoinTransaction t) async {
+    await coinBox.add(t);
+    notifyListeners();
+  }
+
+  Future<void> updateCoin(CoinTransaction t) async {
+    await t.save();
+    notifyListeners();
+  }
+
+  Future<void> deleteCoin(CoinTransaction t) async {
+    final salesToDelete =
+        saleBox.values.where((s) => s.lotId == t.id && !s.isGold).toList();
+    for (var s in salesToDelete) await s.delete();
+    await t.delete();
+    notifyListeners();
+  }
+
+  Future<void> sellGold(
+    GoldTransaction lot,
+    double quantity,
+    double pricePerUnit,
+    DateTime saleDate,
+  ) async {
     if (quantity <= 0 || quantity > lot.remainingQuantity) return;
+
     final sale = SaleTransaction(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       lotId: lot.id,
@@ -293,18 +371,23 @@ class DataProvider extends ChangeNotifier {
       purchasePricePerUnit: lot.purchasePricePerUnit,
       purchaseDate: lot.purchaseDate,
     );
+
     lot.remainingQuantity -= quantity;
-    if (lot.remainingQuantity <= 0.0001) {
-      lot.remainingQuantity = 0;
-    }
+    if (lot.remainingQuantity <= 0.0001) lot.remainingQuantity = 0;
+
     await saleBox.add(sale);
     await lot.save();
     notifyListeners();
   }
 
-  /// فروش سکه - لات حذف نمی‌شود، فقط remainingCount صفر می‌شود
-  Future<void> sellCoin(CoinTransaction lot, int count, double pricePerUnit, DateTime saleDate) async {
+  Future<void> sellCoin(
+    CoinTransaction lot,
+    int count,
+    double pricePerUnit,
+    DateTime saleDate,
+  ) async {
     if (count <= 0 || count > lot.remainingCount) return;
+
     final sale = SaleTransaction(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       lotId: lot.id,
@@ -316,10 +399,10 @@ class DataProvider extends ChangeNotifier {
       purchasePricePerUnit: lot.purchasePricePerUnit,
       purchaseDate: lot.purchaseDate,
     );
+
     lot.remainingCount -= count;
-    if (lot.remainingCount == 0) {
-      lot.remainingCount = 0;
-    }
+    if (lot.remainingCount == 0) lot.remainingCount = 0;
+
     await saleBox.add(sale);
     await lot.save();
     notifyListeners();
@@ -328,7 +411,8 @@ class DataProvider extends ChangeNotifier {
   double get totalRealizedProfit {
     double profit = 0;
     for (var sale in saleBox.values) {
-      profit += (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
+      profit +=
+          (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
     }
     return profit;
   }
@@ -340,15 +424,17 @@ class DataProvider extends ChangeNotifier {
   double getRealizedProfitUntil(DateTime date) {
     double profit = 0;
     final endOfDay = date.add(const Duration(days: 1));
+
     for (var sale in saleBox.values) {
       if (sale.saleDate.isBefore(endOfDay)) {
-        profit += (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
+        profit +=
+            (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
       }
     }
+
     return profit;
   }
 
-  /// سود تحقق‌نیافته با سود بانکی روزشمار
   double getUnrealizedProfit(
     Map<String, double> currentPrices,
     double interestRate, {
@@ -407,188 +493,39 @@ class DataProvider extends ChangeNotifier {
     return profit;
   }
 
-  /// محاسبه عملکرد از یک تاریخ مشخص
-  ///
-  /// [startDate]: تاریخ شروع دوره
-  /// [bankRate]: نرخ سود بانکی سالانه (مثلاً 26.0)
-  /// [basePrices]: قیمت‌های پایه برای تاریخ شروع (فقط برای دارایی‌های قبل از شروع)
-  /// [currentPrices]: قیمت‌های فعلی
-  /// [asOf]: تاریخ پایان محاسبه (پیش‌فرض: اکنون)
-  /// [deductBankInterest]: آیا سود بانکی از نتیجه کم شود؟
-  /// [usePurchasePriceForStartValue]: اگر true، برای دارایی‌های قبل از شروع از قیمت خرید استفاده می‌شود
-  double getProfitFromDate(
-    DateTime startDate,
-    double bankRate,
-    Map<String, double> basePrices,
-    Map<String, double> currentPrices, {
-    DateTime? asOf,
-    bool deductBankInterest = true,
-    bool usePurchasePriceForStartValue = true,
-  }) {
-    final start = DateTime(startDate.year, startDate.month, startDate.day);
-    final endInput = asOf ?? DateTime.now();
-    final end = DateTime(endInput.year, endInput.month, endInput.day);
-
-    // ---------- ۱. ارزش فعلی دارایی‌های باقی‌مانده ----------
-    double currentValue = 0;
-    for (var g in activeGold) {
-      final cp = currentPrices[g.type] ?? 0;
-      currentValue += cp * g.remainingQuantity;
-    }
-    for (var c in activeCoins) {
-      final cp = currentPrices[c.coinType] ?? 0;
-      currentValue += cp * c.remainingCount;
-    }
-
-    // ---------- ۲. جمع فروش‌های داخل دوره ----------
-    double totalSaleProceeds = 0;
-    for (var sale in saleBox.values) {
-      if (!sale.saleDate.isBefore(start) && !sale.saleDate.isAfter(end)) {
-        totalSaleProceeds += sale.salePricePerUnit * sale.quantity;
-      }
-    }
-
-    // ---------- ۳. جمع خریدهای داخل دوره (بعد از تاریخ شروع) ----------
-    double totalPurchaseCostAfter = 0;
-    for (var g in goldBox.values) {
-      if (!g.purchaseDate.isBefore(start) && !g.purchaseDate.isAfter(end)) {
-        totalPurchaseCostAfter += g.purchasePricePerUnit * g.quantity;
-      }
-    }
-    for (var c in coinBox.values) {
-      if (!c.purchaseDate.isBefore(start) && !c.purchaseDate.isAfter(end)) {
-        totalPurchaseCostAfter += c.purchasePricePerUnit * c.count;
-      }
-    }
-
-    // ---------- ۴. ارزش ابتدای دوره (فقط خریدهای قبل از تاریخ شروع) ----------
-    double startValue = 0;
-
-    for (var g in goldBox.values) {
-      // فقط دارایی‌هایی که قبل از تاریخ شروع خریده شده‌اند
-      if (!g.purchaseDate.isBefore(start)) continue;
-
-      double qtyAtStart = g.quantity;
-      // کم کردن فروش‌های قبل از تاریخ شروع
-      for (var sale in saleBox.values) {
-        if (sale.lotId == g.id && sale.isGold && sale.saleDate.isBefore(start)) {
-          qtyAtStart -= sale.quantity;
-        }
-      }
-
-      if (qtyAtStart > 0.0001) {
-        final double startPrice;
-        if (usePurchasePriceForStartValue) {
-          startPrice = g.purchasePricePerUnit;
-        } else {
-          startPrice = basePrices[g.type] ?? g.purchasePricePerUnit;
-        }
-        startValue += startPrice * qtyAtStart;
-      }
-    }
-
-    for (var c in coinBox.values) {
-      // فقط دارایی‌هایی که قبل از تاریخ شروع خریده شده‌اند
-      if (!c.purchaseDate.isBefore(start)) continue;
-
-      int countAtStart = c.count;
-      // کم کردن فروش‌های قبل از تاریخ شروع
-      for (var sale in saleBox.values) {
-        if (sale.lotId == c.id && !sale.isGold && sale.saleDate.isBefore(start)) {
-          countAtStart -= sale.quantity.toInt();
-        }
-      }
-
-      if (countAtStart > 0) {
-        final double startPrice;
-        if (usePurchasePriceForStartValue) {
-          startPrice = c.purchasePricePerUnit;
-        } else {
-          startPrice = basePrices[c.coinType] ?? c.purchasePricePerUnit;
-        }
-        startValue += startPrice * countAtStart;
-      }
-    }
-
-    // ---------- ۵. سود بانکی روزشمار ----------
-    double bankInterest = 0;
-
-    double _calcBankProfit(double paidAmount, DateTime from, DateTime to) {
-      final days = Calculator.daysBetween(from, to);
-      return Calculator.dailyBankProfit(
-        paidAmount: paidAmount,
-        interestRate: bankRate,
-        days: days,
-      );
-    }
-
-    // سود بانکی برای مقدار باقی‌مانده دارایی‌های فعال
-    for (var g in activeGold) {
-      final effectiveStart = g.purchaseDate.isBefore(start) ? start : g.purchaseDate;
-      if (effectiveStart.isBefore(end)) {
-        final paid = g.purchasePricePerUnit * g.remainingQuantity;
-        bankInterest += _calcBankProfit(paid, effectiveStart, end);
-      }
-    }
-    for (var c in activeCoins) {
-      final effectiveStart = c.purchaseDate.isBefore(start) ? start : c.purchaseDate;
-      if (effectiveStart.isBefore(end)) {
-        final paid = c.purchasePricePerUnit * c.remainingCount;
-        bankInterest += _calcBankProfit(paid, effectiveStart, end);
-      }
-    }
-
-    // سود بانکی برای قسمت‌های فروخته‌شده داخل دوره
-    for (var sale in saleBox.values) {
-      if (sale.saleDate.isBefore(start) || sale.saleDate.isAfter(end)) continue;
-      final effectiveStart = sale.purchaseDate.isBefore(start) ? start : sale.purchaseDate;
-      if (effectiveStart.isBefore(sale.saleDate)) {
-        final paid = sale.purchasePricePerUnit * sale.quantity;
-        bankInterest += _calcBankProfit(paid, effectiveStart, sale.saleDate);
-      }
-    }
-
-    // ---------- ۶. محاسبه نهایی ----------
-    final actualProfit = (currentValue + totalSaleProceeds) -
-        (totalPurchaseCostAfter + startValue);
-
-    if (deductBankInterest) {
-      return actualProfit - bankInterest;
-    } else {
-      return actualProfit;
-    }
-  }
-
   Future<Map<String, dynamic>> exportAllData() async {
     final goldData = goldBox.values.map((g) => {
-      'id': g.id,
-      'type': g.type,
-      'purchaseDate': g.purchaseDate.toIso8601String(),
-      'purchasePricePerUnit': g.purchasePricePerUnit,
-      'quantity': g.quantity,
-      'description': g.description,
-      'remainingQuantity': g.remainingQuantity,
-    }).toList();
+          'id': g.id,
+          'type': g.type,
+          'purchaseDate': g.purchaseDate.toIso8601String(),
+          'purchasePricePerUnit': g.purchasePricePerUnit,
+          'quantity': g.quantity,
+          'description': g.description,
+          'remainingQuantity': g.remainingQuantity,
+        }).toList();
+
     final coinData = coinBox.values.map((c) => {
-      'id': c.id,
-      'coinType': c.coinType,
-      'purchaseDate': c.purchaseDate.toIso8601String(),
-      'purchasePricePerUnit': c.purchasePricePerUnit,
-      'count': c.count,
-      'description': c.description,
-      'remainingCount': c.remainingCount,
-    }).toList();
+          'id': c.id,
+          'coinType': c.coinType,
+          'purchaseDate': c.purchaseDate.toIso8601String(),
+          'purchasePricePerUnit': c.purchasePricePerUnit,
+          'count': c.count,
+          'description': c.description,
+          'remainingCount': c.remainingCount,
+        }).toList();
+
     final saleData = saleBox.values.map((s) => {
-      'id': s.id,
-      'lotId': s.lotId,
-      'saleDate': s.saleDate.toIso8601String(),
-      'salePricePerUnit': s.salePricePerUnit,
-      'quantity': s.quantity,
-      'isGold': s.isGold,
-      'coinType': s.coinType,
-      'purchasePricePerUnit': s.purchasePricePerUnit,
-      'purchaseDate': s.purchaseDate.toIso8601String(),
-    }).toList();
+          'id': s.id,
+          'lotId': s.lotId,
+          'saleDate': s.saleDate.toIso8601String(),
+          'salePricePerUnit': s.salePricePerUnit,
+          'quantity': s.quantity,
+          'isGold': s.isGold,
+          'coinType': s.coinType,
+          'purchasePricePerUnit': s.purchasePricePerUnit,
+          'purchaseDate': s.purchaseDate.toIso8601String(),
+        }).toList();
+
     return {
       'goldTransactions': goldData,
       'coinTransactions': coinData,
@@ -645,6 +582,7 @@ class DataProvider extends ChangeNotifier {
       );
       await saleBox.add(s);
     }
+
     notifyListeners();
   }
 }

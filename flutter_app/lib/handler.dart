@@ -38,32 +38,48 @@ String formatWithSeparator(double value) {
 
 String formatJalaliDate(DateTime dt) {
   final j = Jalali.fromDateTime(dt);
-  return '${j.year}/${j.month.toString().padLeft(2,'0')}/${j.day.toString().padLeft(2,'0')}';
+  return '${j.year}/${j.month.toString().padLeft(2, '0')}/${j.day.toString().padLeft(2, '0')}';
 }
 
 String coinName(String t) {
-  switch(t) {
-    case 'coin_new': return 'سکه تمام (امامی)';
-    case 'coin_old': return 'سکه تمام (قدیم)';
-    case 'coin_half': return 'نیم سکه';
-    case 'coin_quarter': return 'ربع سکه';
-    case 'coin_1g': return 'سکه یک گرمی';
-    default: return t;
+  switch (t) {
+    case 'coin_new':
+      return 'سکه تمام (امامی)';
+    case 'coin_old':
+      return 'سکه تمام (قدیم)';
+    case 'coin_half':
+      return 'نیم سکه';
+    case 'coin_quarter':
+      return 'ربع سکه';
+    case 'coin_1g':
+      return 'سکه یک گرمی';
+    default:
+      return t;
   }
 }
 
 String goldTypeName(String k) {
-  switch(k) {
-    case 'gold_18': return 'طلای ۱۸ عیار';
-    case 'gold_24': return 'طلای ۲۴ عیار';
-    case 'gold_ons': return 'انس طلا';
-    case 'gold_mazneh': return 'مظنه تهران';
-    case 'coin_old': return 'سکه قدیم';
-    case 'coin_new': return 'سکه جدید';
-    case 'coin_half': return 'نیم سکه';
-    case 'coin_quarter': return 'ربع سکه';
-    case 'coin_1g': return 'سکه یک گرمی';
-    default: return k;
+  switch (k) {
+    case 'gold_18':
+      return 'طلای ۱۸ عیار';
+    case 'gold_24':
+      return 'طلای ۲۴ عیار';
+    case 'gold_ons':
+      return 'انس طلا';
+    case 'gold_mazneh':
+      return 'مظنه تهران';
+    case 'coin_old':
+      return 'سکه قدیم';
+    case 'coin_new':
+      return 'سکه جدید';
+    case 'coin_half':
+      return 'نیم سکه';
+    case 'coin_quarter':
+      return 'ربع سکه';
+    case 'coin_1g':
+      return 'سکه یک گرمی';
+    default:
+      return k;
   }
 }
 
@@ -191,12 +207,17 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
 class ThousandsSeparatorInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
     if (newValue.text.isEmpty) return newValue;
+
     final clean = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
     if (clean.isEmpty) return newValue;
+
     final intValue = int.tryParse(clean);
     if (intValue == null) return newValue;
+
     final formatted = NumberFormat('#,###').format(intValue);
     return newValue.copyWith(
       text: formatted,
@@ -219,21 +240,28 @@ Future<DateTime?> pickJalaliDate(BuildContext context, DateTime initial) async {
 class ApiService {
   static const String _pageUrl = 'https://www.estjt.ir/price/';
   static const Map<String, String> _nameToKey = {
-    'انس طلا': 'gold_ons', 'مظنه تهران': 'gold_mazneh',
-    'طلای ۱۸ عیار': 'gold_18', 'طلای ۲۴ عیار': 'gold_24',
-    'سکه طرح قدیم': 'coin_old', 'سکه طرح جدید': 'coin_new',
-    'نیم سکه': 'coin_half', 'ربع سکه': 'coin_quarter', 'سکه یک گرمی': 'coin_1g',
+    'انس طلا': 'gold_ons',
+    'مظنه تهران': 'gold_mazneh',
+    'طلای ۱۸ عیار': 'gold_18',
+    'طلای ۲۴ عیار': 'gold_24',
+    'سکه طرح قدیم': 'coin_old',
+    'سکه طرح جدید': 'coin_new',
+    'نیم سکه': 'coin_half',
+    'ربع سکه': 'coin_quarter',
+    'سکه یک گرمی': 'coin_1g',
   };
 
   static String _persianToEnglish(String s) {
     const persian = '۰۱۲۳۴۵۶۷۸۹';
     const english = '0123456789';
     final buf = StringBuffer();
+
     for (final ch in s.runes) {
       final c = String.fromCharCode(ch);
       final i = persian.indexOf(c);
       buf.write(i != -1 ? english[i] : c);
     }
+
     return buf.toString();
   }
 
@@ -246,7 +274,12 @@ class ApiService {
   static Map<String, double?>? _parseChange(String text) {
     final t = _persianToEnglish(text);
     final m = RegExp(r'([\d.]+)\s*\(([\d.]+)\)').firstMatch(t);
-    if (m != null) return {'value': double.tryParse(m.group(1)!), 'percent': double.tryParse(m.group(2)!)};
+    if (m != null) {
+      return {
+        'value': double.tryParse(m.group(1)!),
+        'percent': double.tryParse(m.group(2)!),
+      };
+    }
     return null;
   }
 
@@ -257,27 +290,43 @@ class ApiService {
         'Accept': 'text/html',
         'Accept-Language': 'en-US,en;q=0.5',
       });
+
       if (res.statusCode != 200) return {};
+
       final doc = html_parser.parse(res.body);
       final rows = doc.querySelectorAll('div.price-box table tbody tr');
       final Map<String, PriceResponse> prices = {};
+
       for (final row in rows) {
         final cells = row.querySelectorAll('td');
         if (cells.length < 6) continue;
+
         final name = cells[0].text.trim();
         final key = _nameToKey[name];
         if (key == null) continue;
+
         var cur = _parsePrice(cells[1].text.trim());
         var high = _parsePrice(cells[2].text.trim());
         var low = _parsePrice(cells[3].text.trim());
         var yday = _parsePrice(cells[4].text.trim());
-        String? dir; double? cVal; double? cPct;
+
+        String? dir;
+        double? cVal;
+        double? cPct;
+
         final span = cells[5].querySelector('span');
         if (span != null) {
-          if (span.classes.contains('asc')) dir = 'up';
-          else if (span.classes.contains('desc')) dir = 'down';
+          if (span.classes.contains('asc')) {
+            dir = 'up';
+          } else if (span.classes.contains('desc')) {
+            dir = 'down';
+          }
+
           final cd = _parseChange(span.text.trim());
-          if (cd != null) { cVal = cd['value']; cPct = cd['percent']; }
+          if (cd != null) {
+            cVal = cd['value'];
+            cPct = cd['percent'];
+          }
         }
 
         const rialsMultiplier = 10.0;
@@ -298,8 +347,11 @@ class ApiService {
           change: Change(value: cVal, percent: cPct, direction: dir),
         );
       }
+
       return prices;
-    } catch (_) { return {}; }
+    } catch (_) {
+      return {};
+    }
   }
 }
 
@@ -310,19 +362,31 @@ class PriceProvider extends ChangeNotifier {
   DateTime _lastUpdated = DateTime(2000);
   Timer? _timer;
   final SharedPreferences _prefs;
+
   static const List<String> _priceKeys = [
-    'gold_18','gold_24','gold_ons','gold_mazneh',
-    'coin_old','coin_new','coin_half','coin_quarter','coin_1g'
+    'gold_18',
+    'gold_24',
+    'gold_ons',
+    'gold_mazneh',
+    'coin_old',
+    'coin_new',
+    'coin_half',
+    'coin_quarter',
+    'coin_1g'
   ];
+
   Map<String, PriceResponse> get prices => UnmodifiableMapView(_prices);
   DateTime get lastUpdated => _lastUpdated;
 
   PriceProvider(this._prefs) {
-    _loadSavedPrices(); fetchPrices(); startAutoUpdate();
+    _loadSavedPrices();
+    fetchPrices();
+    startAutoUpdate();
   }
 
   void _loadSavedPrices() {
     _lastSavedPrices = {};
+
     for (var key in _priceKeys) {
       String? jsonStr = _prefs.getString('price_$key');
       if (jsonStr != null) {
@@ -332,6 +396,7 @@ class PriceProvider extends ChangeNotifier {
         } catch (_) {}
       }
     }
+
     if (_lastSavedPrices.isNotEmpty) {
       _prices = Map.from(_lastSavedPrices);
       int? t = _prefs.getInt('last_update');
@@ -347,33 +412,51 @@ class PriceProvider extends ChangeNotifier {
         'high': e.value.high,
         'low': e.value.low,
         'yesterday_avg': e.value.yesterdayAvg,
-        'change': e.value.change != null ? {
-          'value': e.value.change!.value,
-          'percent': e.value.change!.percent,
-          'direction': e.value.change!.direction,
-        } : null,
+        'change': e.value.change != null
+            ? {
+                'value': e.value.change!.value,
+                'percent': e.value.change!.percent,
+                'direction': e.value.change!.direction,
+              }
+            : null,
       });
       await _prefs.setString('price_${e.key}', jsonStr);
     }
-    await _prefs.setInt('last_update', DateTime.now().millisecondsSinceEpoch);
+
+    await _prefs.setInt(
+      'last_update',
+      DateTime.now().millisecondsSinceEpoch,
+    );
   }
 
   void startAutoUpdate({int intervalSeconds = 300}) {
     _timer?.cancel();
-    _timer = Timer.periodic(Duration(seconds: intervalSeconds), (_) => fetchPrices());
+    _timer = Timer.periodic(
+      Duration(seconds: intervalSeconds),
+      (_) => fetchPrices(),
+    );
   }
-  void setAutoUpdateInterval(int s) { startAutoUpdate(intervalSeconds: s); }
+
+  void setAutoUpdateInterval(int s) {
+    startAutoUpdate(intervalSeconds: s);
+  }
 
   Future<void> fetchPrices() async {
     final newPrices = await ApiService.fetchAllPrices();
+
     if (newPrices.isNotEmpty) {
       _prices = newPrices;
       _lastSavedPrices = Map.from(newPrices);
       _lastUpdated = DateTime.now();
       await _savePrices(newPrices);
     }
+
     notifyListeners();
   }
 
-  @override void dispose() { _timer?.cancel(); super.dispose(); }
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 }
