@@ -1,1 +1,1 @@
-tg://proxy?server=better-suzuki-eugene-robust.trycloudflare.com&port=443&secret=ef034dbe07f869daa22582718a08bbc6
+tg://proxy?server=water-portions-diego-motherboard.trycloudflare.com&port=443&secret=b0beed37d52309e4774ffd78891039c2
