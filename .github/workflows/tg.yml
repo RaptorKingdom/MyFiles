@@ -1,4 +1,4 @@
-name: Simple Cloudflare Tunnel for Telegram Proxy
+name: Fast Telegram Proxy via Cloudflare Tunnel
 
 on:
   workflow_dispatch:
@@ -16,16 +16,21 @@ jobs:
       - name: دریافت کد مخزن
         uses: actions/checkout@v4
 
-      - name: نصب پروکسی MTProto و اجرای آن
+      - name: اجرای پروکسی faketls (mtg)
         run: |
-          pip install mtprotoproxy
+          # تولید secret تصادفی برای پروکسی
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # اجرای پروکسی در پس‌زمینه روی پورت 8888
-          mtprotoproxy -p 8888 -s $SECRET &
-          sleep 2
-          echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
+          # دانلود mtg - پروکسی MTProto با قابلیت faketls
+          curl -L https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-linux-amd64 -o mtg
+          chmod +x mtg
+          sudo mv mtg /usr/local/bin/
+
+          # اجرا روی پورت 8443 با حالت faketls
+          mtg run -b 0.0.0.0:8443 $SECRET --prefer-ss=false --stats-bind=127.0.0.1:3128 > mtg.log 2>&1 &
+          sleep 3
+          echo "✅ پروکسی faketls روی پورت 8443 اجرا شد"
 
       - name: نصب و راه‌اندازی تونل Cloudflare
         run: |
@@ -34,23 +39,25 @@ jobs:
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
 
-          echo "🌐 در حال ایجاد تونل TCP..."
-          cloudflared tunnel --url tcp://localhost:8888 --no-autoupdate > cloudflare.log 2>&1 &
+          echo "🌐 در حال ایجاد تونل HTTP برای پروکسی..."
+          cloudflared tunnel --url http://localhost:8443 --no-autoupdate > cloudflare.log 2>&1 &
 
           # انتظار برای آماده شدن تونل
           sleep 8
 
-          # استخراج آدرس تونل (دامنه و پورت)
-          TUNNEL_URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:\d+' cloudflare.log | head -n1)
+          # استخراج دامنه تونل (فقط hostname)
+          TUNNEL_HOST=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
 
-          if [ -z "$TUNNEL_URL" ]; then
+          if [ -z "$TUNNEL_HOST" ]; then
             echo "❌ خطا در ساخت تونل"
             cat cloudflare.log
             exit 1
           fi
 
-          HOST=$(echo "$TUNNEL_URL" | cut -d'/' -f3 | cut -d: -f1)
-          PORT=$(echo "$TUNNEL_URL" | cut -d: -f3)
+          # حذف https:// از ابتدای آدرس
+          HOST=${TUNNEL_HOST#https://}
+          # پورت faketls روی 443 خواهد بود (پیش‌فرض مرورگرها)
+          PORT=443
 
           echo "HOST=$HOST" >> $GITHUB_ENV
           echo "PORT=$PORT" >> $GITHUB_ENV
@@ -59,7 +66,7 @@ jobs:
           echo "$PROXY_LINK" > link.md
           echo "PROXY_LINK=$PROXY_LINK" >> $GITHUB_ENV
 
-          echo "✅ تونل ساخته شد: $TUNNEL_URL"
+          echo "✅ تونل ساخته شد: $TUNNEL_HOST"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
           # آپلود فوری لینک در مخزن
@@ -69,7 +76,7 @@ jobs:
           git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری برای commit وجود نداشت"
           git push
 
-      - name: نمایش و ذخیره آدرس تونل
+      - name: نمایش و ذخیره اطلاعات تونل
         run: |
           echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
           echo "🔐 Secret: ${{ env.SECRET }}"
@@ -92,27 +99,24 @@ jobs:
             if ! pgrep -x cloudflared > /dev/null; then
               echo "⚠️ تونل قطع شده، راه‌اندازی مجدد..."
 
-              # کشتن پروسه احتمالی قبلی
               pkill cloudflared 2>/dev/null || true
               sleep 2
 
-              # راه‌اندازی مجدد تونل
-              cloudflared tunnel --url tcp://localhost:8888 --no-autoupdate > cloudflare.log 2>&1 &
+              cloudflared tunnel --url http://localhost:8443 --no-autoupdate > cloudflare.log 2>&1 &
               sleep 8
 
-              NEW_URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:\d+' cloudflare.log | head -n1)
-              if [ -n "$NEW_URL" ]; then
-                HOST=$(echo "$NEW_URL" | cut -d'/' -f3 | cut -d: -f1)
-                PORT=$(echo "$NEW_URL" | cut -d: -f3)
+              NEW_HOST_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
+              if [ -n "$NEW_HOST_URL" ]; then
+                HOST=${NEW_HOST_URL#https://}
+                PORT=443
                 PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
                 echo "$PROXY_LINK" > link.md
-                echo "🔄 تونل جدید: $NEW_URL"
+                echo "🔄 تونل جدید: $HOST"
 
-                # آپلود لینک جدید در مخزن
                 git config user.name "github-actions[bot]"
                 git config user.email "github-actions[bot]@users.noreply.github.com"
                 git add link.md
-                git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "⚠️ تغییری برای commit وجود نداشت"
+                git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "⚠️ تغییری نبود"
                 git push
               else
                 echo "❌ راه‌اندازی مجدد تونل شکست خورد"
@@ -122,7 +126,7 @@ jobs:
             sleep 30
           done
 
-          echo "✅ زمان نگهبانی به پایان رسید"
+          echo "✅ زمان نگهبانی پایان یافت"
 
       - name: آپلود نهایی لینک (اختیاری)
         if: always()
@@ -131,6 +135,6 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add link.md
-            git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "⚠️ تغییری برای commit وجود نداشت"
+            git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "⚠️ تغییری نبود"
             git push
           fi
