@@ -31,7 +31,6 @@ jobs:
 
       - name: دانلود و نصب آخرین نسخه bore
         run: |
-          # دریافت لینک آخرین نسخه bore از GitHub API
           DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | \
             jq -r '.assets[] | select(.name | test("x86_64.*linux|linux.*x86_64")) | .browser_download_url' | head -1)
 
@@ -42,7 +41,6 @@ jobs:
 
           echo "📥 دانلود از: $DOWNLOAD_URL"
 
-          # پسوند فایل را تشخیص بده
           if [[ "$DOWNLOAD_URL" == *.zip ]]; then
             curl -L "$DOWNLOAD_URL" -o bore.zip
             unzip -o bore.zip
@@ -50,11 +48,9 @@ jobs:
             curl -L "$DOWNLOAD_URL" -o bore.tar.gz
             tar xzf bore.tar.gz
           else
-            # باینری خام
             curl -L "$DOWNLOAD_URL" -o bore
           fi
 
-          # اگر فایل اجرایی bore هنوز وجود ندارد، اولین فایل با الگوی bore* را انتخاب کن
           if [ ! -f bore ]; then
             BINARY_NAME=$(ls bore* 2>/dev/null | head -1)
             if [ -n "$BINARY_NAME" ] && [ "$BINARY_NAME" != "bore" ]; then
@@ -70,10 +66,25 @@ jobs:
         id: tunnel
         run: |
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
+          # پاک کردن لاگ قبلی
+          rm -f bore.log
+          # اجرای bore و ذخیره خروجی بدون کدهای رنگی
           bore local 8888 --to bore.pub 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > bore.log &
-          sleep 5
+          BORE_PID=$!
 
-          # استخراج خط حاوی "listening at"
+          # انتظار تا ظاهر شدن آدرس (حداکثر ۲۰ ثانیه)
+          for i in {1..20}; do
+            if grep -q 'listening at' bore.log; then
+              break
+            fi
+            if ! kill -0 $BORE_PID 2>/dev/null; then
+              echo "❌ پروسه bore متوقف شد"
+              cat bore.log
+              exit 1
+            fi
+            sleep 1
+          done
+
           BORE_LINE=$(grep 'listening at' bore.log | head -1)
           if [ -z "$BORE_LINE" ]; then
             echo "❌ تونل ساخته نشد. خروجی bore:"
@@ -81,7 +92,6 @@ jobs:
             exit 1
           fi
 
-          # مثال: "listening at bore.pub:58675"
           BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
           HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
           PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
@@ -134,8 +144,19 @@ jobs:
               pkill bore 2>/dev/null || true
               sleep 2
 
+              rm -f bore.log
               bore local 8888 --to bore.pub 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > bore.log &
-              sleep 5
+              BORE_PID=$!
+
+              for i in {1..20}; do
+                if grep -q 'listening at' bore.log; then
+                  break
+                fi
+                if ! kill -0 $BORE_PID 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
 
               NEW_LINE=$(grep 'listening at' bore.log | head -1)
               if [ -n "$NEW_LINE" ]; then
