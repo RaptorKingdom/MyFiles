@@ -6,7 +6,7 @@ on:
       duration:
         description: 'مدت زمان اجرا (دقیقه - حداکثر ۳۵۰)'
         required: true
-        default: '60'
+        default: '350'
 
 jobs:
   proxy:
@@ -25,21 +25,46 @@ jobs:
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
+          # اجرای پروکسی روی پورت 8888
           mtprotoproxy -p 8888 -s $SECRET &
           sleep 2
           echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
-      - name: نصب و راه‌اندازی تونل Bore
+      - name: دانلود و نصب آخرین نسخه bore (از GitHub API)
         run: |
-          # دانلود نسخه 0.6.0 bore برای لینوکس
-          curl -L https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-x86_64-unknown-linux-musl.tar.gz -o bore.tar.gz
-          tar xzf bore.tar.gz
+          # دریافت لینک دانلود آخرین نسخه bore برای لینوکس
+          DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | \
+            jq -r '.assets[] | select(.name | test("x86_64.*linux|linux.*x86_64")) | .browser_download_url' | head -1)
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "❌ دریافت لینک دانلود ناموفق بود"
+            exit 1
+          fi
+
+          echo "📥 دانلود از: $DOWNLOAD_URL"
+          curl -L "$DOWNLOAD_URL" -o bore
+
+          # اگر فایل zip یا tar بود استخراج کن
+          if [[ "$DOWNLOAD_URL" == *.zip ]]; then
+            unzip -o bore
+            BINARY_NAME=$(ls bore* | grep -v '\.zip$' | head -1)
+            mv "$BINARY_NAME" bore
+          elif [[ "$DOWNLOAD_URL" == *.tar.gz ]]; then
+            tar xzf bore
+            BINARY_NAME=$(ls bore* | grep -v '\.tar\.gz$' | head -1)
+            mv "$BINARY_NAME" bore
+          fi
+
           chmod +x bore
           sudo mv bore /usr/local/bin/
+          echo "✅ bore نصب شد"
 
+      - name: ساخت تونل TCP با bore و دریافت آدرس
+        id: tunnel
+        run: |
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
           bore local 8888 --to bore.pub > bore.log 2>&1 &
-          
+
           # انتظار برای آماده شدن تونل
           sleep 5
 
@@ -98,6 +123,7 @@ jobs:
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
+            # بررسی سلامت پروسه bore
             if ! pgrep -x bore > /dev/null; then
               echo "⚠️ تونل bore قطع شده، راه‌اندازی مجدد..."
 
