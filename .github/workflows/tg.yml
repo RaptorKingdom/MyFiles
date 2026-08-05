@@ -16,7 +16,6 @@ jobs:
       - name: دریافت کد مخزن
         uses: actions/checkout@v4
         with:
-          ref: main   # یا نام شاخه‌تان
           fetch-depth: 0
 
       - name: اجرای پروکسی faketls (mtg)
@@ -58,21 +57,22 @@ jobs:
           echo "PORT=$PORT" >> $GITHUB_ENV
 
           PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
-          echo "$PROXY_LINK" > link.md
           echo "PROXY_LINK=$PROXY_LINK" >> $GITHUB_ENV
 
           echo "✅ تونل ساخته شد: $TUNNEL_HOST"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # هماهنگ‌سازی و push
+          # ذخیره لینک و آپلود ایمن در مخزن
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
+          rm -f link.md
+          git pull origin main
+          echo "$PROXY_LINK" > link.md
           git add link.md
           git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری برای commit وجود نداشت"
           git push
 
-      - name: نمایش و ذخیره اطلاعات تونل
+      - name: نمایش اطلاعات تونل
         run: |
           echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
           echo "🔐 Secret: ${{ env.SECRET }}"
@@ -104,12 +104,14 @@ jobs:
                 HOST=${NEW_HOST_URL#https://}
                 PORT=443
                 PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
-                echo "$PROXY_LINK" > link.md
                 echo "🔄 تونل جدید: $HOST"
 
+                # آپلود لینک جدید
                 git config user.name "github-actions[bot]"
                 git config user.email "github-actions[bot]@users.noreply.github.com"
-                git pull --rebase origin main
+                rm -f link.md
+                git pull origin main
+                echo "$PROXY_LINK" > link.md
                 git add link.md
                 git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "⚠️ تغییری نبود"
                 git push
@@ -126,10 +128,12 @@ jobs:
       - name: آپلود نهایی لینک (اختیاری)
         if: always()
         run: |
-          if [ -f link.md ]; then
+          if [ -n "${{ env.PROXY_LINK }}" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git pull --rebase origin main
+            rm -f link.md
+            git pull origin main
+            echo "${{ env.PROXY_LINK }}" > link.md
             git add link.md
             git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "⚠️ تغییری نبود"
             git push
