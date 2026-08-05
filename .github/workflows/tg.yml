@@ -15,26 +15,25 @@ jobs:
     steps:
       - name: دریافت کد مخزن
         uses: actions/checkout@v4
+        with:
+          ref: main   # یا نام شاخه‌تان
+          fetch-depth: 0
 
       - name: اجرای پروکسی faketls (mtg)
         run: |
-          # تولید secret تصادفی برای پروکسی
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # دانلود mtg - پروکسی MTProto با قابلیت faketls
           curl -L https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-linux-amd64 -o mtg
           chmod +x mtg
           sudo mv mtg /usr/local/bin/
 
-          # اجرا روی پورت 8443 با حالت faketls
           mtg run -b 0.0.0.0:8443 $SECRET --prefer-ss=false --stats-bind=127.0.0.1:3128 > mtg.log 2>&1 &
           sleep 3
           echo "✅ پروکسی faketls روی پورت 8443 اجرا شد"
 
       - name: نصب و راه‌اندازی تونل Cloudflare
         run: |
-          # دانلود cloudflared
           curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
           chmod +x cloudflared
           sudo mv cloudflared /usr/local/bin/
@@ -42,10 +41,8 @@ jobs:
           echo "🌐 در حال ایجاد تونل HTTP برای پروکسی..."
           cloudflared tunnel --url http://localhost:8443 --no-autoupdate > cloudflare.log 2>&1 &
 
-          # انتظار برای آماده شدن تونل
           sleep 8
 
-          # استخراج دامنه تونل (فقط hostname)
           TUNNEL_HOST=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
 
           if [ -z "$TUNNEL_HOST" ]; then
@@ -54,9 +51,7 @@ jobs:
             exit 1
           fi
 
-          # حذف https:// از ابتدای آدرس
           HOST=${TUNNEL_HOST#https://}
-          # پورت faketls روی 443 خواهد بود (پیش‌فرض مرورگرها)
           PORT=443
 
           echo "HOST=$HOST" >> $GITHUB_ENV
@@ -69,9 +64,10 @@ jobs:
           echo "✅ تونل ساخته شد: $TUNNEL_HOST"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # آپلود فوری لینک در مخزن
+          # هماهنگ‌سازی و push
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
           git add link.md
           git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری برای commit وجود نداشت"
           git push
@@ -84,7 +80,6 @@ jobs:
       - name: نگهبانی و زنده نگه‌داشتن تونل
         run: |
           DURATION=${{ github.event.inputs.duration }}
-          # محدودیت حداکثر ۳۵۰ دقیقه
           if [ "$DURATION" -gt 350 ]; then DURATION=350; fi
           END_TIME=$(date -d "$DURATION minutes" +%s)
           SECRET=${{ env.SECRET }}
@@ -95,7 +90,6 @@ jobs:
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
-            # بررسی سلامت پروسه cloudflared
             if ! pgrep -x cloudflared > /dev/null; then
               echo "⚠️ تونل قطع شده، راه‌اندازی مجدد..."
 
@@ -115,6 +109,7 @@ jobs:
 
                 git config user.name "github-actions[bot]"
                 git config user.email "github-actions[bot]@users.noreply.github.com"
+                git pull --rebase origin main
                 git add link.md
                 git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "⚠️ تغییری نبود"
                 git push
@@ -134,6 +129,7 @@ jobs:
           if [ -f link.md ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
+            git pull --rebase origin main
             git add link.md
             git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "⚠️ تغییری نبود"
             git push
