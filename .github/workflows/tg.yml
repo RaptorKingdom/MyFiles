@@ -1,57 +1,51 @@
-name: Telegram MTProto Proxy (Cloudflare Tunnel)
+name: Simple Cloudflare Tunnel for Telegram Proxy
 
 on:
   workflow_dispatch:
     inputs:
       duration:
-        description: 'مدت زمان فعال بودن پروکسی (دقیقه - حداکثر ۳۵۰)'
+        description: 'مدت زمان اجرا (دقیقه - حداکثر ۳۵۰)'
         required: true
         default: '60'
-        type: string
 
 jobs:
-  proxy:
+  tunnel-proxy:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
 
     steps:
-      - name: دریافت کد مخزن (با دسترسی کامل)
+      - name: دریافت کد مخزن
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: تولید secret تصادفی
+      - name: نصب پروکسی MTProto و اجرای آن
         run: |
+          pip install mtprotoproxy
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-      - name: نصب پروکسی MTProto
-        run: |
-          pip install mtprotoproxy
-          echo "✅ mtprotoproxy نصب شد"
-
-      - name: اجرای پروکسی در پس‌زمینه
-        run: |
+          # اجرای پروکسی در پس‌زمینه روی پورت 8888
           mtprotoproxy -p 8888 -s $SECRET &
           sleep 2
-          echo "✅ پروکسی روی پورت 8888 اجرا شد"
+          echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
-      - name: دانلود و نصب cloudflared
+      - name: نصب و راه‌اندازی تونل Cloudflare
         run: |
+          # دانلود cloudflared
           curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
           chmod +x cloudflared
-          echo "✅ cloudflared آماده است"
+          sudo mv cloudflared /usr/local/bin/
 
-      - name: ایجاد تونل TCP و آپلود اولیه لینک
-        id: tunnel
-        run: |
-          cloudflared tunnel --url tcp://localhost:8888 --no-autoupdate > tunnel.log 2>&1 &
-          sleep 10
+          echo "🌐 در حال ایجاد تونل TCP..."
+          cloudflared tunnel --url tcp://localhost:8888 --no-autoupdate > cloudflare.log 2>&1 &
 
-          TUNNEL_URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:\d+' tunnel.log | head -1)
+          # انتظار برای آماده شدن تونل
+          sleep 8
+
+          # استخراج آدرس تونل (دامنه و پورت)
+          TUNNEL_URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:\d+' cloudflare.log | head -n1)
+
           if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ خطا در ایجاد تونل"
-            cat tunnel.log
+            echo "❌ خطا در ساخت تونل"
+            cat cloudflare.log
             exit 1
           fi
 
@@ -65,37 +59,48 @@ jobs:
           echo "$PROXY_LINK" > link.md
           echo "PROXY_LINK=$PROXY_LINK" >> $GITHUB_ENV
 
-          echo "✅ تونل آماده: $TUNNEL_URL"
+          echo "✅ تونل ساخته شد: $TUNNEL_URL"
+          echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # آپلود فوری لینک به مخزن
+          # آپلود فوری لینک در مخزن
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add link.md
-          git commit -m "🔗 لینک پروکسی آماده شد" || echo "تغییری برای commit وجود ندارد"
+          git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری برای commit وجود نداشت"
           git push
 
-      - name: نگهبانی تونل (با push خودکار در صورت تغییر آدرس)
+      - name: نمایش و ذخیره آدرس تونل
+        run: |
+          echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
+          echo "🔐 Secret: ${{ env.SECRET }}"
+
+      - name: نگهبانی و زنده نگه‌داشتن تونل
         run: |
           DURATION=${{ github.event.inputs.duration }}
+          # محدودیت حداکثر ۳۵۰ دقیقه
           if [ "$DURATION" -gt 350 ]; then DURATION=350; fi
           END_TIME=$(date -d "$DURATION minutes" +%s)
           SECRET=${{ env.SECRET }}
 
-          echo "⏳ تونل برای $DURATION دقیقه فعال می‌ماند..."
+          echo "⏳ نگهبانی تونل برای $DURATION دقیقه..."
 
           while [ $(date +%s) -lt $END_TIME ]; do
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
+            # بررسی سلامت پروسه cloudflared
             if ! pgrep -x cloudflared > /dev/null; then
               echo "⚠️ تونل قطع شده، راه‌اندازی مجدد..."
+
+              # کشتن پروسه احتمالی قبلی
               pkill cloudflared 2>/dev/null || true
               sleep 2
 
-              cloudflared tunnel --url tcp://localhost:8888 --no-autoupdate > tunnel.log 2>&1 &
-              sleep 10
+              # راه‌اندازی مجدد تونل
+              cloudflared tunnel --url tcp://localhost:8888 --no-autoupdate > cloudflare.log 2>&1 &
+              sleep 8
 
-              NEW_URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:\d+' tunnel.log | head -1)
+              NEW_URL=$(grep -oP 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:\d+' cloudflare.log | head -n1)
               if [ -n "$NEW_URL" ]; then
                 HOST=$(echo "$NEW_URL" | cut -d'/' -f3 | cut -d: -f1)
                 PORT=$(echo "$NEW_URL" | cut -d: -f3)
@@ -103,29 +108,29 @@ jobs:
                 echo "$PROXY_LINK" > link.md
                 echo "🔄 تونل جدید: $NEW_URL"
 
-                # آپلود فوری لینک جدید
+                # آپلود لینک جدید در مخزن
                 git config user.name "github-actions[bot]"
                 git config user.email "github-actions[bot]@users.noreply.github.com"
                 git add link.md
-                git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "تغییری برای commit وجود ندارد"
+                git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "⚠️ تغییری برای commit وجود نداشت"
                 git push
+              else
+                echo "❌ راه‌اندازی مجدد تونل شکست خورد"
               fi
             fi
 
             sleep 30
           done
 
-          echo "✅ زمان نگهبانی پایان یافت"
+          echo "✅ زمان نگهبانی به پایان رسید"
 
-      - name: آپلود نهایی لینک (حتی در صورت خطا)
+      - name: آپلود نهایی لینک (اختیاری)
         if: always()
         run: |
           if [ -f link.md ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add link.md
-            git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "تغییری برای commit وجود ندارد"
+            git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "⚠️ تغییری برای commit وجود نداشت"
             git push
-          else
-            echo "⚠️ فایل link.md وجود ندارد"
           fi
