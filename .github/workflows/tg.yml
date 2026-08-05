@@ -19,22 +19,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: نصب و اجرای پروکسی MTProto
+      - name: دانلود و اجرای پروکسی MTProto (mtg)
         run: |
-          pip install mtprotoproxy
+          # تولید secret تصادفی (32 کاراکتر هگز = 16 بایت)
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # اجرای صحیح: mtprotoproxy <port> <secret>
-          nohup mtprotoproxy 8888 $SECRET > mtproto.log 2>&1 &
+          # دانلود mtg (پروکسی مستقل MTProto)
+          curl -L https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-linux-amd64 -o mtg
+          chmod +x mtg
+          sudo mv mtg /usr/local/bin/
+
+          # اجرای پروکسی ساده MTProto روی پورت 8888
+          nohup mtg run -b 0.0.0.0:8888 $SECRET --prefer-ss=false > mtg.log 2>&1 &
           sleep 3
 
+          # بررسی اینکه پورت 8888 در حال گوش دادن است
           if ! ss -tlnp | grep -q 8888; then
             echo "❌ پروکسی MTProto روی پورت 8888 اجرا نشد"
-            cat mtproto.log
+            cat mtg.log
             exit 1
           fi
-          echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
+          echo "✅ پروکسی MTProto (mtg) روی پورت 8888 اجرا شد"
 
       - name: دانلود و نصب آخرین نسخه bore
         run: |
