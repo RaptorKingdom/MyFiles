@@ -1,1 +1,1 @@
-tg://proxy?server=bore.pub&port=62761&secret=df323466d388252eed97fb1cbab869eb
+tg://proxy?server=bore.pub&port=46745&secret=c51ca22e024e034e3188e21b2257917d
