@@ -1,4 +1,4 @@
-name: Telegram MTProto Proxy via Bore Tunnel
+name: MTProto Proxy (alexbers + bore)
 
 on:
   workflow_dispatch:
@@ -19,77 +19,63 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: دانلود و اجرای پروکسی MTProto (mtg)
+      - name: نصب Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: کلون پروژه اصلی mtprotoproxy و پیکربندی
         run: |
+          git clone https://github.com/alexbers/mtprotoproxy.git
+          cd mtprotoproxy
+
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # دریافت لینک آخرین نسخه mtg برای لینوکس از GitHub API
-          DOWNLOAD_URL=$(curl -s https://api.github.com/repos/9seconds/mtg/releases/latest | \
-            jq -r '.assets[] | select(.name | test("linux-amd64")) | .browser_download_url' | head -1)
+          # تنظیم پورت، کلید مخفی و دامنه Fake TLS (طبق مستندات شما)
+          cat > config.py <<EOF
+          PORT = 8888
+          USERS = {"$SECRET": "proxyuser"}
+          TLS_DOMAIN = "www.google.com"
+          EOF
 
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo "❌ لینک دانلود mtg پیدا نشد"
-            exit 1
-          fi
+          # نصب نیازمندی‌ها (اگر فایل requirements.txt وجود داشته باشد)
+          pip install -r requirements.txt 2>/dev/null || true
+          echo "✅ پروژه پیکربندی شد"
 
-          echo "📥 دانلود mtg از: $DOWNLOAD_URL"
-          curl -L "$DOWNLOAD_URL" -o mtg
-          chmod +x mtg
-          sudo mv mtg /usr/local/bin/
-
-          # اجرای پروکسی ساده MTProto روی پورت 8888
-          nohup mtg run -b 0.0.0.0:8888 $SECRET --prefer-ss=false > mtg.log 2>&1 &
+      - name: اجرای پروکسی MTProto در پس‌زمینه
+        run: |
+          cd mtprotoproxy
+          nohup python3 mtprotoproxy.py > ../proxy.log 2>&1 &
           sleep 3
 
           if ! ss -tlnp | grep -q 8888; then
-            echo "❌ پروکسی MTProto روی پورت 8888 اجرا نشد"
-            cat mtg.log
+            echo "❌ پروکسی روی پورت 8888 اجرا نشد"
+            cat ../proxy.log
             exit 1
           fi
-          echo "✅ پروکسی MTProto (mtg) روی پورت 8888 اجرا شد"
+          echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
-      - name: دانلود و نصب آخرین نسخه bore
+      - name: نصب bore (آخرین نسخه)
         run: |
           DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | \
             jq -r '.assets[] | select(.name | test("x86_64.*linux|linux.*x86_64")) | .browser_download_url' | head -1)
-
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo "❌ دریافت لینک دانلود ناموفق بود"
-            exit 1
-          fi
-
-          echo "📥 دانلود از: $DOWNLOAD_URL"
-
-          if [[ "$DOWNLOAD_URL" == *.zip ]]; then
-            curl -L "$DOWNLOAD_URL" -o bore.zip
-            unzip -o bore.zip
-          elif [[ "$DOWNLOAD_URL" == *.tar.gz ]]; then
-            curl -L "$DOWNLOAD_URL" -o bore.tar.gz
-            tar xzf bore.tar.gz
-          else
-            curl -L "$DOWNLOAD_URL" -o bore
-          fi
-
-          if [ ! -f bore ]; then
-            BINARY_NAME=$(ls bore* 2>/dev/null | head -1)
-            if [ -n "$BINARY_NAME" ] && [ "$BINARY_NAME" != "bore" ]; then
-              mv "$BINARY_NAME" bore
-            fi
-          fi
-
-          chmod +x bore
-          sudo mv bore /usr/local/bin/
+          echo "📥 دانلود bore از: $DOWNLOAD_URL"
+          curl -L "$DOWNLOAD_URL" -o bore.tar.gz
+          tar xzf bore.tar.gz
+          BINARY=$(ls bore* 2>/dev/null | grep -v '\.tar\.gz$' | head -1)
+          chmod +x "$BINARY"
+          sudo mv "$BINARY" /usr/local/bin/bore
           echo "✅ bore نصب شد"
 
-      - name: ساخت تونل TCP با bore و دریافت آدرس
+      - name: ساخت تونل TCP و آپلود لینک
         id: tunnel
         run: |
-          echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
           rm -f bore.log
           bore local 8888 --to bore.pub > bore.log 2>&1 &
           BORE_PID=$!
 
+          # انتظار برای آماده شدن تونل
           for i in {1..20}; do
             if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
               break
@@ -104,7 +90,7 @@ jobs:
 
           BORE_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
           if [ -z "$BORE_LINE" ]; then
-            echo "❌ تونل ساخته نشد. خروجی bore:"
+            echo "❌ تونل ساخته نشد"
             cat bore.log
             exit 1
           fi
@@ -112,21 +98,14 @@ jobs:
           BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
           HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
           PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
-
-          if [ -z "$HOST" ] || [ -z "$PORT" ]; then
-            echo "❌ خطا در استخراج host/port از: $BORE_LINE"
-            exit 1
-          fi
-
-          echo "HOST=$HOST" >> $GITHUB_ENV
-          echo "PORT=$PORT" >> $GITHUB_ENV
-
+          
           PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
           echo "PROXY_LINK=$PROXY_LINK" >> $GITHUB_ENV
 
           echo "✅ تونل ساخته شد: $HOST:$PORT"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
+          # آپلود در مخزن
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f link.md
@@ -136,12 +115,12 @@ jobs:
           git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری نبود"
           git push
 
-      - name: نمایش اطلاعات تونل
+      - name: نمایش اطلاعات
         run: |
           echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
           echo "🔐 Secret: ${{ env.SECRET }}"
 
-      - name: نگهبانی و زنده نگه‌داشتن تونل
+      - name: نگهبانی (Keep Alive) تا پایان زمان
         run: |
           DURATION=${{ github.event.inputs.duration }}
           if [ "$DURATION" -gt 350 ]; then DURATION=350; fi
@@ -155,15 +134,12 @@ jobs:
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
             if ! pgrep -x bore > /dev/null; then
-              echo "⚠️ تونل bore قطع شده، راه‌اندازی مجدد..."
-
+              echo "⚠️ تونل bore قطع شد، راه‌اندازی مجدد..."
               pkill bore 2>/dev/null || true
               sleep 2
-
               rm -f bore.log
               bore local 8888 --to bore.pub > bore.log 2>&1 &
               BORE_PID=$!
-
               for i in {1..20}; do
                 if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
                   break
@@ -173,7 +149,6 @@ jobs:
                 fi
                 sleep 1
               done
-
               NEW_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
               if [ -n "$NEW_LINE" ]; then
                 NEW_ADDR=$(echo "$NEW_LINE" | grep -oP 'bore\.pub:\d+')
@@ -181,26 +156,23 @@ jobs:
                 PORT=$(echo "$NEW_ADDR" | cut -d: -f2)
                 PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
                 echo "🔄 تونل جدید: $HOST:$PORT"
-
                 git config user.name "github-actions[bot]"
                 git config user.email "github-actions[bot]@users.noreply.github.com"
                 rm -f link.md
                 git pull origin main
                 echo "$PROXY_LINK" > link.md
                 git add link.md
-                git commit -m "🔄 به‌روزرسانی لینک پروکسی (تغییر تونل)" || echo "⚠️ تغییری نبود"
+                git commit -m "🔄 به‌روزرسانی لینک (تغییر تونل)" || echo "⚠️ تغییری نبود"
                 git push
               else
                 echo "❌ راه‌اندازی مجدد تونل شکست خورد"
               fi
             fi
-
             sleep 30
           done
-
           echo "✅ زمان نگهبانی پایان یافت"
 
-      - name: آپلود نهایی لینک (اختیاری)
+      - name: آپلود نهایی (اختیاری)
         if: always()
         run: |
           if [ -n "${{ env.PROXY_LINK }}" ]; then
@@ -210,6 +182,6 @@ jobs:
             git pull origin main
             echo "${{ env.PROXY_LINK }}" > link.md
             git add link.md
-            git commit -m "⏹ پایان اجرا - آخرین لینک پروکسی" || echo "⚠️ تغییری نبود"
+            git commit -m "⏹ پایان اجرا" || echo "⚠️ تغییری نبود"
             git push
           fi
