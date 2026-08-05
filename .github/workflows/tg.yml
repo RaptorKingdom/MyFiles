@@ -6,7 +6,7 @@ on:
       duration:
         description: 'مدت زمان اجرا (دقیقه - حداکثر ۳۵۰)'
         required: true
-        default: '350'
+        default: '60'
 
 jobs:
   proxy:
@@ -25,14 +25,13 @@ jobs:
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # اجرای پروکسی روی پورت 8888
           mtprotoproxy -p 8888 -s $SECRET &
           sleep 2
           echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
-      - name: دانلود و نصب آخرین نسخه bore (از GitHub API)
+      - name: دانلود و نصب آخرین نسخه bore
         run: |
-          # دریافت لینک دانلود آخرین نسخه bore برای لینوکس
+          # دریافت لینک آخرین نسخه bore از GitHub API
           DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | \
             jq -r '.assets[] | select(.name | test("x86_64.*linux|linux.*x86_64")) | .browser_download_url' | head -1)
 
@@ -42,17 +41,25 @@ jobs:
           fi
 
           echo "📥 دانلود از: $DOWNLOAD_URL"
-          curl -L "$DOWNLOAD_URL" -o bore
 
-          # اگر فایل zip یا tar بود استخراج کن
+          # پسوند فایل را تشخیص بده
           if [[ "$DOWNLOAD_URL" == *.zip ]]; then
-            unzip -o bore
-            BINARY_NAME=$(ls bore* | grep -v '\.zip$' | head -1)
-            mv "$BINARY_NAME" bore
+            curl -L "$DOWNLOAD_URL" -o bore.zip
+            unzip -o bore.zip
           elif [[ "$DOWNLOAD_URL" == *.tar.gz ]]; then
-            tar xzf bore
-            BINARY_NAME=$(ls bore* | grep -v '\.tar\.gz$' | head -1)
-            mv "$BINARY_NAME" bore
+            curl -L "$DOWNLOAD_URL" -o bore.tar.gz
+            tar xzf bore.tar.gz
+          else
+            # باینری خام
+            curl -L "$DOWNLOAD_URL" -o bore
+          fi
+
+          # اگر فایل اجرایی bore هنوز وجود ندارد، اولین فایل با الگوی bore* را انتخاب کن
+          if [ ! -f bore ]; then
+            BINARY_NAME=$(ls bore* 2>/dev/null | head -1)
+            if [ -n "$BINARY_NAME" ] && [ "$BINARY_NAME" != "bore" ]; then
+              mv "$BINARY_NAME" bore
+            fi
           fi
 
           chmod +x bore
@@ -65,10 +72,8 @@ jobs:
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
           bore local 8888 --to bore.pub > bore.log 2>&1 &
 
-          # انتظار برای آماده شدن تونل
           sleep 5
 
-          # استخراج خط حاوی "listening on"
           BORE_LINE=$(grep 'listening on' bore.log | head -1)
           if [ -z "$BORE_LINE" ]; then
             echo "❌ تونل ساخته نشد. خروجی bore:"
@@ -76,7 +81,6 @@ jobs:
             exit 1
           fi
 
-          # مثال: "listening on bore.pub:12345"
           BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
           HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
           PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
@@ -95,7 +99,7 @@ jobs:
           echo "✅ تونل ساخته شد: $HOST:$PORT"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # آپلود فوری لینک در مخزن
+          # آپلود فوری لینک
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f link.md
@@ -123,7 +127,6 @@ jobs:
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
-            # بررسی سلامت پروسه bore
             if ! pgrep -x bore > /dev/null; then
               echo "⚠️ تونل bore قطع شده، راه‌اندازی مجدد..."
 
