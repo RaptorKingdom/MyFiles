@@ -19,19 +19,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: نصب پروکسی MTProto و اجرای آن
+      - name: نصب و اجرای پروکسی MTProto
         run: |
           pip install mtprotoproxy
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # اجرای پروکسی روی پورت 8888
-          mtprotoproxy -p 8888 -s $SECRET &
+          # اجرای صحیح: mtprotoproxy <port> <secret>
+          nohup mtprotoproxy 8888 $SECRET > mtproto.log 2>&1 &
           sleep 3
 
-          # بررسی اینکه پورت 8888 واقعاً در حال گوش دادن است
           if ! ss -tlnp | grep -q 8888; then
             echo "❌ پروکسی MTProto روی پورت 8888 اجرا نشد"
+            cat mtproto.log
             exit 1
           fi
           echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
@@ -74,7 +74,6 @@ jobs:
         run: |
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
           rm -f bore.log
-          # اجرای bore و ذخیره خروجی خام (بدون تغییر)
           bore local 8888 --to bore.pub > bore.log 2>&1 &
           BORE_PID=$!
 
@@ -91,7 +90,6 @@ jobs:
             sleep 1
           done
 
-          # استخراج خط بعد از پاکسازی کدهای رنگی
           BORE_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
           if [ -z "$BORE_LINE" ]; then
             echo "❌ تونل ساخته نشد. خروجی bore:"
