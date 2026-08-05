@@ -25,23 +25,22 @@ jobs:
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # اجرای پروکسی روی پورت 8888
           mtprotoproxy -p 8888 -s $SECRET &
           sleep 2
           echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
-      - name: دانلود و نصب bore (نسخه 0.6.0)
+      - name: نصب و راه‌اندازی تونل Bore
         run: |
-          curl -L https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-x86_64-unknown-linux-musl -o bore
+          # دانلود نسخه 0.6.0 bore برای لینوکس
+          curl -L https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-x86_64-unknown-linux-musl.tar.gz -o bore.tar.gz
+          tar xzf bore.tar.gz
           chmod +x bore
           sudo mv bore /usr/local/bin/
-          echo "✅ bore نصب شد"
 
-      - name: ساخت تونل TCP با bore و دریافت آدرس
-        id: tunnel
-        run: |
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
           bore local 8888 --to bore.pub > bore.log 2>&1 &
+          
+          # انتظار برای آماده شدن تونل
           sleep 5
 
           # استخراج خط حاوی "listening on"
@@ -52,7 +51,7 @@ jobs:
             exit 1
           fi
 
-          # مثال خروجی: "listening on bore.pub:12345"
+          # مثال: "listening on bore.pub:12345"
           BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
           HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
           PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
@@ -71,7 +70,7 @@ jobs:
           echo "✅ تونل ساخته شد: $HOST:$PORT"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # آپلود فوری در مخزن
+          # آپلود فوری لینک در مخزن
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f link.md
@@ -86,7 +85,7 @@ jobs:
           echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
           echo "🔐 Secret: ${{ env.SECRET }}"
 
-      - name: نگهبانی و زنده نگه‌داشتن تونل (تا پایان زمان)
+      - name: نگهبانی و زنده نگه‌داشتن تونل
         run: |
           DURATION=${{ github.event.inputs.duration }}
           if [ "$DURATION" -gt 350 ]; then DURATION=350; fi
@@ -99,7 +98,6 @@ jobs:
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
-            # بررسی سلامت پروسه bore
             if ! pgrep -x bore > /dev/null; then
               echo "⚠️ تونل bore قطع شده، راه‌اندازی مجدد..."
 
@@ -117,7 +115,6 @@ jobs:
                 PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
                 echo "🔄 تونل جدید: $HOST:$PORT"
 
-                # آپلود لینک جدید
                 git config user.name "github-actions[bot]"
                 git config user.email "github-actions[bot]@users.noreply.github.com"
                 rm -f link.md
