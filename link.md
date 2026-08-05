@@ -1,1 +1,1 @@
-tg://proxy?server=water-portions-diego-motherboard.trycloudflare.com&port=443&secret=b0beed37d52309e4774ffd78891039c2
+tg://proxy?server=bore.pub&port=62761&secret=df323466d388252eed97fb1cbab869eb
