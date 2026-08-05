@@ -1,4 +1,4 @@
-name: Fast Telegram Proxy via Cloudflare Tunnel
+name: Telegram MTProto Proxy via Bore Tunnel
 
 on:
   workflow_dispatch:
@@ -9,8 +9,9 @@ on:
         default: '60'
 
 jobs:
-  tunnel-proxy:
+  proxy:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - name: دریافت کد مخزن
@@ -18,40 +19,48 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: اجرای پروکسی faketls (mtg)
+      - name: نصب پروکسی MTProto و اجرای آن
         run: |
+          pip install mtprotoproxy
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          curl -L https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-linux-amd64 -o mtg
-          chmod +x mtg
-          sudo mv mtg /usr/local/bin/
+          # اجرای پروکسی روی پورت 8888
+          mtprotoproxy -p 8888 -s $SECRET &
+          sleep 2
+          echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
-          mtg run -b 0.0.0.0:8443 $SECRET --prefer-ss=false --stats-bind=127.0.0.1:3128 > mtg.log 2>&1 &
-          sleep 3
-          echo "✅ پروکسی faketls روی پورت 8443 اجرا شد"
-
-      - name: نصب و راه‌اندازی تونل Cloudflare
+      - name: دانلود و نصب bore (نسخه 0.6.0)
         run: |
-          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
-          chmod +x cloudflared
-          sudo mv cloudflared /usr/local/bin/
+          curl -L https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-x86_64-unknown-linux-musl -o bore
+          chmod +x bore
+          sudo mv bore /usr/local/bin/
+          echo "✅ bore نصب شد"
 
-          echo "🌐 در حال ایجاد تونل HTTP برای پروکسی..."
-          cloudflared tunnel --url http://localhost:8443 --no-autoupdate > cloudflare.log 2>&1 &
+      - name: ساخت تونل TCP با bore و دریافت آدرس
+        id: tunnel
+        run: |
+          echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
+          bore local 8888 --to bore.pub > bore.log 2>&1 &
+          sleep 5
 
-          sleep 8
-
-          TUNNEL_HOST=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
-
-          if [ -z "$TUNNEL_HOST" ]; then
-            echo "❌ خطا در ساخت تونل"
-            cat cloudflare.log
+          # استخراج خط حاوی "listening on"
+          BORE_LINE=$(grep 'listening on' bore.log | head -1)
+          if [ -z "$BORE_LINE" ]; then
+            echo "❌ تونل ساخته نشد. خروجی bore:"
+            cat bore.log
             exit 1
           fi
 
-          HOST=${TUNNEL_HOST#https://}
-          PORT=443
+          # مثال خروجی: "listening on bore.pub:12345"
+          BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
+          HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
+          PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
+
+          if [ -z "$HOST" ] || [ -z "$PORT" ]; then
+            echo "❌ خطا در استخراج host/port از: $BORE_LINE"
+            exit 1
+          fi
 
           echo "HOST=$HOST" >> $GITHUB_ENV
           echo "PORT=$PORT" >> $GITHUB_ENV
@@ -59,17 +68,17 @@ jobs:
           PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
           echo "PROXY_LINK=$PROXY_LINK" >> $GITHUB_ENV
 
-          echo "✅ تونل ساخته شد: $TUNNEL_HOST"
+          echo "✅ تونل ساخته شد: $HOST:$PORT"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # ذخیره لینک و آپلود ایمن در مخزن
+          # آپلود فوری در مخزن
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f link.md
           git pull origin main
           echo "$PROXY_LINK" > link.md
           git add link.md
-          git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری برای commit وجود نداشت"
+          git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری نبود"
           git push
 
       - name: نمایش اطلاعات تونل
@@ -77,7 +86,7 @@ jobs:
           echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
           echo "🔐 Secret: ${{ env.SECRET }}"
 
-      - name: نگهبانی و زنده نگه‌داشتن تونل
+      - name: نگهبانی و زنده نگه‌داشتن تونل (تا پایان زمان)
         run: |
           DURATION=${{ github.event.inputs.duration }}
           if [ "$DURATION" -gt 350 ]; then DURATION=350; fi
@@ -90,21 +99,23 @@ jobs:
             REMAINING=$((END_TIME - $(date +%s)))
             echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
 
-            if ! pgrep -x cloudflared > /dev/null; then
-              echo "⚠️ تونل قطع شده، راه‌اندازی مجدد..."
+            # بررسی سلامت پروسه bore
+            if ! pgrep -x bore > /dev/null; then
+              echo "⚠️ تونل bore قطع شده، راه‌اندازی مجدد..."
 
-              pkill cloudflared 2>/dev/null || true
+              pkill bore 2>/dev/null || true
               sleep 2
 
-              cloudflared tunnel --url http://localhost:8443 --no-autoupdate > cloudflare.log 2>&1 &
-              sleep 8
+              bore local 8888 --to bore.pub > bore.log 2>&1 &
+              sleep 5
 
-              NEW_HOST_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare.log | head -n1)
-              if [ -n "$NEW_HOST_URL" ]; then
-                HOST=${NEW_HOST_URL#https://}
-                PORT=443
+              NEW_LINE=$(grep 'listening on' bore.log | head -1)
+              if [ -n "$NEW_LINE" ]; then
+                NEW_ADDR=$(echo "$NEW_LINE" | grep -oP 'bore\.pub:\d+')
+                HOST=$(echo "$NEW_ADDR" | cut -d: -f1)
+                PORT=$(echo "$NEW_ADDR" | cut -d: -f2)
                 PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
-                echo "🔄 تونل جدید: $HOST"
+                echo "🔄 تونل جدید: $HOST:$PORT"
 
                 # آپلود لینک جدید
                 git config user.name "github-actions[bot]"
