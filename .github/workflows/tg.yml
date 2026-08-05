@@ -70,17 +70,18 @@ jobs:
         id: tunnel
         run: |
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
-          bore local 8888 --to bore.pub > bore.log 2>&1 &
-
+          bore local 8888 --to bore.pub 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > bore.log &
           sleep 5
 
-          BORE_LINE=$(grep 'listening on' bore.log | head -1)
+          # استخراج خط حاوی "listening at"
+          BORE_LINE=$(grep 'listening at' bore.log | head -1)
           if [ -z "$BORE_LINE" ]; then
             echo "❌ تونل ساخته نشد. خروجی bore:"
             cat bore.log
             exit 1
           fi
 
+          # مثال: "listening at bore.pub:58675"
           BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
           HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
           PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
@@ -133,10 +134,10 @@ jobs:
               pkill bore 2>/dev/null || true
               sleep 2
 
-              bore local 8888 --to bore.pub > bore.log 2>&1 &
+              bore local 8888 --to bore.pub 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > bore.log &
               sleep 5
 
-              NEW_LINE=$(grep 'listening on' bore.log | head -1)
+              NEW_LINE=$(grep 'listening at' bore.log | head -1)
               if [ -n "$NEW_LINE" ]; then
                 NEW_ADDR=$(echo "$NEW_LINE" | grep -oP 'bore\.pub:\d+')
                 HOST=$(echo "$NEW_ADDR" | cut -d: -f1)
