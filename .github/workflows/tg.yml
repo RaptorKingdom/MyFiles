@@ -21,12 +21,20 @@ jobs:
 
       - name: دانلود و اجرای پروکسی MTProto (mtg)
         run: |
-          # تولید secret تصادفی (32 کاراکتر هگز = 16 بایت)
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # دانلود mtg (پروکسی مستقل MTProto)
-          curl -L https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-linux-amd64 -o mtg
+          # دریافت لینک آخرین نسخه mtg برای لینوکس از GitHub API
+          DOWNLOAD_URL=$(curl -s https://api.github.com/repos/9seconds/mtg/releases/latest | \
+            jq -r '.assets[] | select(.name | test("linux-amd64")) | .browser_download_url' | head -1)
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "❌ لینک دانلود mtg پیدا نشد"
+            exit 1
+          fi
+
+          echo "📥 دانلود mtg از: $DOWNLOAD_URL"
+          curl -L "$DOWNLOAD_URL" -o mtg
           chmod +x mtg
           sudo mv mtg /usr/local/bin/
 
@@ -34,7 +42,6 @@ jobs:
           nohup mtg run -b 0.0.0.0:8888 $SECRET --prefer-ss=false > mtg.log 2>&1 &
           sleep 3
 
-          # بررسی اینکه پورت 8888 در حال گوش دادن است
           if ! ss -tlnp | grep -q 8888; then
             echo "❌ پروکسی MTProto روی پورت 8888 اجرا نشد"
             cat mtg.log
@@ -83,7 +90,6 @@ jobs:
           bore local 8888 --to bore.pub > bore.log 2>&1 &
           BORE_PID=$!
 
-          # انتظار تا ظاهر شدن آدرس (حداکثر ۲۰ ثانیه)
           for i in {1..20}; do
             if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
               break
@@ -121,7 +127,6 @@ jobs:
           echo "✅ تونل ساخته شد: $HOST:$PORT"
           echo "🔗 لینک پروکسی: $PROXY_LINK"
 
-          # آپلود فوری لینک
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f link.md
