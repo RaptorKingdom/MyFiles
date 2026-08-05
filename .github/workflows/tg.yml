@@ -1,4 +1,4 @@
-name: MTProto Proxy (alexbers + bore)
+name: MTProto Proxy (Simple, no Fake TLS)
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: کلون پروژه اصلی mtprotoproxy و پیکربندی
+      - name: کلون پروژه اصلی و پیکربندی (بدون Fake TLS)
         run: |
           git clone https://github.com/alexbers/mtprotoproxy.git
           cd mtprotoproxy
@@ -32,41 +32,36 @@ jobs:
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
-          # تنظیم پورت، کلید مخفی و دامنه Fake TLS (طبق مستندات شما)
+          # تنظیمات بدون TLS_DOMAIN → پروکسی ساده MTProto
           cat > config.py <<EOF
           PORT = 8888
           USERS = {"$SECRET": "proxyuser"}
-          TLS_DOMAIN = "www.google.com"
           EOF
 
-          # نصب نیازمندی‌ها (اگر فایل requirements.txt وجود داشته باشد)
           pip install -r requirements.txt 2>/dev/null || true
-          echo "✅ پروژه پیکربندی شد"
+          echo "✅ پروژه پیکربندی شد (ساده)"
 
-      - name: اجرای پروکسی MTProto در پس‌زمینه
+      - name: اجرای پروکسی MTProto روی پورت 8888
         run: |
           cd mtprotoproxy
           nohup python3 mtprotoproxy.py > ../proxy.log 2>&1 &
           sleep 3
-
           if ! ss -tlnp | grep -q 8888; then
-            echo "❌ پروکسی روی پورت 8888 اجرا نشد"
+            echo "❌ پروکسی اجرا نشد"
             cat ../proxy.log
             exit 1
           fi
-          echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
+          echo "✅ پروکسی MTProto (ساده) روی پورت 8888 آماده است"
 
-      - name: نصب bore (آخرین نسخه)
+      - name: نصب آخرین نسخه bore
         run: |
           DOWNLOAD_URL=$(curl -s https://api.github.com/repos/ekzhang/bore/releases/latest | \
             jq -r '.assets[] | select(.name | test("x86_64.*linux|linux.*x86_64")) | .browser_download_url' | head -1)
-          echo "📥 دانلود bore از: $DOWNLOAD_URL"
           curl -L "$DOWNLOAD_URL" -o bore.tar.gz
           tar xzf bore.tar.gz
           BINARY=$(ls bore* 2>/dev/null | grep -v '\.tar\.gz$' | head -1)
           chmod +x "$BINARY"
           sudo mv "$BINARY" /usr/local/bin/bore
-          echo "✅ bore نصب شد"
 
       - name: ساخت تونل TCP و آپلود لینک
         id: tunnel
@@ -74,84 +69,57 @@ jobs:
           rm -f bore.log
           bore local 8888 --to bore.pub > bore.log 2>&1 &
           BORE_PID=$!
-
-          # انتظار برای آماده شدن تونل
           for i in {1..20}; do
             if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
               break
             fi
-            if ! kill -0 $BORE_PID 2>/dev/null; then
-              echo "❌ پروسه bore متوقف شد"
-              cat bore.log
-              exit 1
-            fi
+            kill -0 $BORE_PID 2>/dev/null || { cat bore.log; exit 1; }
             sleep 1
           done
 
           BORE_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
-          if [ -z "$BORE_LINE" ]; then
-            echo "❌ تونل ساخته نشد"
-            cat bore.log
-            exit 1
-          fi
-
           BORE_ADDR=$(echo "$BORE_LINE" | grep -oP 'bore\.pub:\d+')
           HOST=$(echo "$BORE_ADDR" | cut -d: -f1)
           PORT=$(echo "$BORE_ADDR" | cut -d: -f2)
           
           PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
           echo "PROXY_LINK=$PROXY_LINK" >> $GITHUB_ENV
+          echo "✅ تونل: $HOST:$PORT"
+          echo "🔗 لینک: $PROXY_LINK"
 
-          echo "✅ تونل ساخته شد: $HOST:$PORT"
-          echo "🔗 لینک پروکسی: $PROXY_LINK"
-
-          # آپلود در مخزن
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -f link.md
           git pull origin main
           echo "$PROXY_LINK" > link.md
           git add link.md
-          git commit -m "🔗 لینک پروکسی آماده شد" || echo "⚠️ تغییری نبود"
+          git commit -m "🔗 لینک پروکسی آماده" || echo "بدون تغییر"
           git push
 
-      - name: نمایش اطلاعات
-        run: |
-          echo "🔗 آدرس تونل: ${{ env.HOST }}:${{ env.PORT }}"
-          echo "🔐 Secret: ${{ env.SECRET }}"
-
-      - name: نگهبانی (Keep Alive) تا پایان زمان
+      - name: نگهبانی (Keep Alive)
         run: |
           DURATION=${{ github.event.inputs.duration }}
-          if [ "$DURATION" -gt 350 ]; then DURATION=350; fi
+          [ "$DURATION" -gt 350 ] && DURATION=350
           END_TIME=$(date -d "$DURATION minutes" +%s)
           SECRET=${{ env.SECRET }}
 
-          echo "⏳ نگهبانی تونل برای $DURATION دقیقه..."
-
           while [ $(date +%s) -lt $END_TIME ]; do
             REMAINING=$((END_TIME - $(date +%s)))
-            echo "[$(date +%H:%M:%S)] زمان باقی‌مانده: $((REMAINING/60)) دقیقه و $((REMAINING%60)) ثانیه"
-
+            echo "[$(date +%H:%M:%S)] $((REMAINING/60)) دقیقه مانده"
             if ! pgrep -x bore > /dev/null; then
-              echo "⚠️ تونل bore قطع شد، راه‌اندازی مجدد..."
+              echo "⚠️ تونل قطع، راه‌اندازی مجدد..."
               pkill bore 2>/dev/null || true
               sleep 2
               rm -f bore.log
               bore local 8888 --to bore.pub > bore.log 2>&1 &
               BORE_PID=$!
               for i in {1..20}; do
-                if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
-                  break
-                fi
-                if ! kill -0 $BORE_PID 2>/dev/null; then
-                  break
-                fi
+                grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g') && break
+                kill -0 $BORE_PID 2>/dev/null || break
                 sleep 1
               done
-              NEW_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
-              if [ -n "$NEW_LINE" ]; then
-                NEW_ADDR=$(echo "$NEW_LINE" | grep -oP 'bore\.pub:\d+')
+              NEW_ADDR=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | grep -oP 'bore\.pub:\d+' | head -1)
+              if [ -n "$NEW_ADDR" ]; then
                 HOST=$(echo "$NEW_ADDR" | cut -d: -f1)
                 PORT=$(echo "$NEW_ADDR" | cut -d: -f2)
                 PROXY_LINK="tg://proxy?server=$HOST&port=$PORT&secret=$SECRET"
@@ -162,17 +130,14 @@ jobs:
                 git pull origin main
                 echo "$PROXY_LINK" > link.md
                 git add link.md
-                git commit -m "🔄 به‌روزرسانی لینک (تغییر تونل)" || echo "⚠️ تغییری نبود"
+                git commit -m "🔄 به‌روزرسانی لینک" || echo "بدون تغییر"
                 git push
-              else
-                echo "❌ راه‌اندازی مجدد تونل شکست خورد"
               fi
             fi
             sleep 30
           done
-          echo "✅ زمان نگهبانی پایان یافت"
 
-      - name: آپلود نهایی (اختیاری)
+      - name: آپلود نهایی
         if: always()
         run: |
           if [ -n "${{ env.PROXY_LINK }}" ]; then
@@ -182,6 +147,6 @@ jobs:
             git pull origin main
             echo "${{ env.PROXY_LINK }}" > link.md
             git add link.md
-            git commit -m "⏹ پایان اجرا" || echo "⚠️ تغییری نبود"
+            git commit -m "⏹ پایان" || echo "بدون تغییر"
             git push
           fi
