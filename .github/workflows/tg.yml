@@ -25,8 +25,15 @@ jobs:
           SECRET=$(openssl rand -hex 16)
           echo "SECRET=$SECRET" >> $GITHUB_ENV
 
+          # اجرای پروکسی روی پورت 8888
           mtprotoproxy -p 8888 -s $SECRET &
-          sleep 2
+          sleep 3
+
+          # بررسی اینکه پورت 8888 واقعاً در حال گوش دادن است
+          if ! ss -tlnp | grep -q 8888; then
+            echo "❌ پروکسی MTProto روی پورت 8888 اجرا نشد"
+            exit 1
+          fi
           echo "✅ پروکسی MTProto روی پورت 8888 اجرا شد"
 
       - name: دانلود و نصب آخرین نسخه bore
@@ -66,15 +73,14 @@ jobs:
         id: tunnel
         run: |
           echo "🌐 در حال ایجاد تونل TCP روی bore.pub..."
-          # پاک کردن لاگ قبلی
           rm -f bore.log
-          # اجرای bore و ذخیره خروجی بدون کدهای رنگی
-          bore local 8888 --to bore.pub 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > bore.log &
+          # اجرای bore و ذخیره خروجی خام (بدون تغییر)
+          bore local 8888 --to bore.pub > bore.log 2>&1 &
           BORE_PID=$!
 
           # انتظار تا ظاهر شدن آدرس (حداکثر ۲۰ ثانیه)
           for i in {1..20}; do
-            if grep -q 'listening at' bore.log; then
+            if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
               break
             fi
             if ! kill -0 $BORE_PID 2>/dev/null; then
@@ -85,7 +91,8 @@ jobs:
             sleep 1
           done
 
-          BORE_LINE=$(grep 'listening at' bore.log | head -1)
+          # استخراج خط بعد از پاکسازی کدهای رنگی
+          BORE_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
           if [ -z "$BORE_LINE" ]; then
             echo "❌ تونل ساخته نشد. خروجی bore:"
             cat bore.log
@@ -145,11 +152,11 @@ jobs:
               sleep 2
 
               rm -f bore.log
-              bore local 8888 --to bore.pub 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > bore.log &
+              bore local 8888 --to bore.pub > bore.log 2>&1 &
               BORE_PID=$!
 
               for i in {1..20}; do
-                if grep -q 'listening at' bore.log; then
+                if grep -q 'listening at' <(cat bore.log | sed 's/\x1b\[[0-9;]*m//g'); then
                   break
                 fi
                 if ! kill -0 $BORE_PID 2>/dev/null; then
@@ -158,7 +165,7 @@ jobs:
                 sleep 1
               done
 
-              NEW_LINE=$(grep 'listening at' bore.log | head -1)
+              NEW_LINE=$(cat bore.log | sed 's/\x1b\[[0-9;]*m//g' | grep 'listening at' | head -1)
               if [ -n "$NEW_LINE" ]; then
                 NEW_ADDR=$(echo "$NEW_LINE" | grep -oP 'bore\.pub:\d+')
                 HOST=$(echo "$NEW_ADDR" | cut -d: -f1)
