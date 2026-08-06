@@ -35,7 +35,6 @@ String formatNumberFa(dynamic value) {
   final double v = value is num
       ? value.toDouble()
       : double.tryParse(value.toString()) ?? 0;
-
   final formatted = NumberFormat('#,###.###').format(v);
   return formatted.toPersianDigit();
 }
@@ -113,15 +112,12 @@ String numberToTomanWords(double amount) {
 String convertPersianDigitsToEnglish(String input) {
   const persian = '۰۱۲۳۴۵۶۷۸۹';
   const arabic = '٠١٢٣٤٥٦٧٨٩';
-
   String result = input;
-
   for (int i = 0; i < 10; i++) {
     result = result
         .replaceAll(persian[i], i.toString())
         .replaceAll(arabic[i], i.toString());
   }
-
   return result;
 }
 
@@ -148,7 +144,6 @@ class PersianAwareNumberFormatter extends TextInputFormatter {
     if (intValue == null) return newValue;
 
     final formatted = NumberFormat('#,###').format(intValue);
-
     return TextEditingValue(
       text: formatted,
       selection: TextSelection.collapsed(offset: formatted.length),
@@ -160,7 +155,8 @@ class PersianAwareNumberFormatter extends TextInputFormatter {
 class NumberInputWithToman extends StatefulWidget {
   final String label;
   final String? initialValue;
-  final ValueChanged<String> onSaved;
+  final TextEditingController? controller;
+  final ValueChanged<String>? onSaved;
   final TextInputType keyboardType;
   final FormFieldValidator<String>? validator;
   final bool isPrice;
@@ -169,7 +165,8 @@ class NumberInputWithToman extends StatefulWidget {
     Key? key,
     required this.label,
     this.initialValue,
-    required this.onSaved,
+    this.controller,
+    this.onSaved,
     this.keyboardType = TextInputType.number,
     this.validator,
     this.isPrice = true,
@@ -181,18 +178,26 @@ class NumberInputWithToman extends StatefulWidget {
 
 class _NumberInputWithTomanState extends State<NumberInputWithToman> {
   late TextEditingController _controller;
+  bool _ownsController = false;
   String _tomanText = '';
   String _wordsText = '';
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initialValue ?? '');
+
+    if (widget.controller != null) {
+      _controller = widget.controller!;
+    } else {
+      _controller = TextEditingController(text: widget.initialValue ?? '');
+      _ownsController = true;
+    }
+
     _updateDisplay(_controller.text);
-    _controller.addListener(() {
-      _updateDisplay(_controller.text);
-    });
+    _controller.addListener(_onTextChanged);
   }
+
+  void _onTextChanged() => _updateDisplay(_controller.text);
 
   void _updateDisplay(String value) {
     final converted = convertPersianDigitsToEnglish(value);
@@ -214,7 +219,8 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller.removeListener(_onTextChanged);
+    if (_ownsController) _controller.dispose();
     super.dispose();
   }
 
@@ -236,11 +242,13 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
             PersianAwareNumberFormatter(),
           ],
           validator: widget.validator,
-          onSaved: (v) {
-            final converted = convertPersianDigitsToEnglish(v ?? '');
-            final cleaned = converted.replaceAll(RegExp(r'[^\d]'), '');
-            widget.onSaved(cleaned);
-          },
+          onSaved: widget.onSaved != null
+              ? (v) {
+                  final converted = convertPersianDigitsToEnglish(v ?? '');
+                  final cleaned = converted.replaceAll(RegExp(r'[^\d]'), '');
+                  widget.onSaved!(cleaned);
+                }
+              : null,
         ),
         if (_tomanText.isNotEmpty && widget.isPrice)
           Padding(
@@ -279,6 +287,7 @@ Future<DateTime?> pickJalaliDate(BuildContext context, DateTime initial) async {
 // -------------------- ApiService --------------------
 class ApiService {
   static const String _pageUrl = 'https://www.estjt.ir/price/';
+
   static const Map<String, String> _nameToKey = {
     'انس طلا': 'gold_ons',
     'مظنه تهران': 'gold_mazneh',
@@ -295,13 +304,11 @@ class ApiService {
     const persian = '۰۱۲۳۴۵۶۷۸۹';
     const english = '0123456789';
     final buf = StringBuffer();
-
     for (final ch in s.runes) {
       final c = String.fromCharCode(ch);
       final i = persian.indexOf(c);
       buf.write(i != -1 ? english[i] : c);
     }
-
     return buf.toString();
   }
 
@@ -426,7 +433,6 @@ class PriceProvider extends ChangeNotifier {
 
   void _loadSavedPrices() {
     _lastSavedPrices = {};
-
     for (var key in _priceKeys) {
       String? jsonStr = _prefs.getString('price_$key');
       if (jsonStr != null) {
@@ -483,14 +489,12 @@ class PriceProvider extends ChangeNotifier {
 
   Future<void> fetchPrices() async {
     final newPrices = await ApiService.fetchAllPrices();
-
     if (newPrices.isNotEmpty) {
       _prices = newPrices;
       _lastSavedPrices = Map.from(newPrices);
       _lastUpdated = DateTime.now();
       await _savePrices(newPrices);
     }
-
     notifyListeners();
   }
 

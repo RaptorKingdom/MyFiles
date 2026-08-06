@@ -21,7 +21,6 @@ class Calculator {
     required int days,
   }) {
     if (days <= 0 || paidAmount <= 0) return 0;
-
     final dailyRate = interestRate / 100 / 365;
     return (paidAmount * (pow(1 + dailyRate, days) - 1)).toDouble();
   }
@@ -44,13 +43,11 @@ class Calculator {
   }) {
     final currentValue = currentPrice * quantity;
     final purchaseProfit = currentValue - paidAmount;
-
     final bankProfit = dailyBankProfit(
       paidAmount: paidAmount,
       interestRate: interestRate,
       days: days,
     );
-
     return purchaseProfit - bankProfit;
   }
 }
@@ -175,10 +172,12 @@ class SettingsProvider extends ChangeNotifier {
   double _bankInterestRate = 26.0;
   int _autoUpdateInterval = 300;
   Color _secondaryColor = Colors.amber;
+  Color _menuColor = Colors.black;
 
   double get bankInterestRate => _bankInterestRate;
   int get autoUpdateInterval => _autoUpdateInterval;
   Color get secondaryColor => _secondaryColor;
+  Color get menuColor => _menuColor;
 
   final SharedPreferences _prefs;
 
@@ -200,6 +199,17 @@ class SettingsProvider extends ChangeNotifier {
         }
       } catch (_) {}
     }
+
+    final menuColorStr = _prefs.getString('menuColor');
+    if (menuColorStr != null) {
+      try {
+        if (menuColorStr.startsWith('#')) {
+          _menuColor = Color(int.parse(menuColorStr.substring(1), radix: 16));
+        } else {
+          _menuColor = Color(int.parse(menuColorStr));
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> setBankInterestRate(double v) async {
@@ -218,6 +228,13 @@ class SettingsProvider extends ChangeNotifier {
     _secondaryColor = c;
     final hexColor = '#${c.value.toRadixString(16).padLeft(8, '0')}';
     await _prefs.setString('secondaryColor', hexColor);
+    notifyListeners();
+  }
+
+  Future<void> setMenuColor(Color c) async {
+    _menuColor = c;
+    final hexColor = '#${c.value.toRadixString(16).padLeft(8, '0')}';
+    await _prefs.setString('menuColor', hexColor);
     notifyListeners();
   }
 }
@@ -408,6 +425,67 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> deleteSale(SaleTransaction sale) async {
+    if (sale.isGold) {
+      final lot = goldBox.get(sale.lotId);
+      if (lot != null) {
+        double newRemaining = lot.remainingQuantity + sale.quantity;
+        if (newRemaining > lot.quantity) newRemaining = lot.quantity;
+        lot.remainingQuantity = newRemaining;
+        await lot.save();
+      }
+    } else {
+      final lot = coinBox.get(sale.lotId);
+      if (lot != null) {
+        int newRemaining = lot.remainingCount + sale.quantity.toInt();
+        if (newRemaining > lot.count) newRemaining = lot.count;
+        lot.remainingCount = newRemaining;
+        await lot.save();
+      }
+    }
+
+    await sale.delete();
+    notifyListeners();
+  }
+
+  Future<void> updateSale(
+    SaleTransaction sale, {
+    required double quantity,
+    required double pricePerUnit,
+    required DateTime saleDate,
+  }) async {
+    if (quantity <= 0 || pricePerUnit <= 0) return;
+
+    final oldQty = sale.quantity;
+    final qtyDiff = oldQty - quantity;
+
+    if (sale.isGold) {
+      final lot = goldBox.get(sale.lotId);
+      if (lot != null) {
+        double newRemaining = lot.remainingQuantity + qtyDiff;
+        if (newRemaining < 0) newRemaining = 0;
+        if (newRemaining > lot.quantity) newRemaining = lot.quantity;
+        lot.remainingQuantity = newRemaining;
+        await lot.save();
+      }
+    } else {
+      final lot = coinBox.get(sale.lotId);
+      if (lot != null) {
+        int newRemaining = lot.remainingCount + qtyDiff.toInt();
+        if (newRemaining < 0) newRemaining = 0;
+        if (newRemaining > lot.count) newRemaining = lot.count;
+        lot.remainingCount = newRemaining;
+        await lot.save();
+      }
+    }
+
+    sale.quantity = quantity;
+    sale.salePricePerUnit = pricePerUnit;
+    sale.saleDate = saleDate;
+    await sale.save();
+    notifyListeners();
+  }
+
   double get totalRealizedProfit {
     double profit = 0;
     for (var sale in saleBox.values) {
@@ -424,14 +502,12 @@ class DataProvider extends ChangeNotifier {
   double getRealizedProfitUntil(DateTime date) {
     double profit = 0;
     final endOfDay = date.add(const Duration(days: 1));
-
     for (var sale in saleBox.values) {
       if (sale.saleDate.isBefore(endOfDay)) {
         profit +=
             (sale.salePricePerUnit - sale.purchasePricePerUnit) * sale.quantity;
       }
     }
-
     return profit;
   }
 
