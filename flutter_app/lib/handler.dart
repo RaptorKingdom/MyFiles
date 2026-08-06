@@ -12,7 +12,7 @@ import 'package:shamsi_date/shamsi_date.dart';
 import 'package:persian_number_utility/persian_number_utility.dart';
 import 'logic.dart';
 
-// -------------------- توابع کمکی (Helpers) --------------------
+// -------------------- Helpers --------------------
 String formatRial(double amount) {
   final formatted = NumberFormat('#,###').format(amount);
   return formatted.toPersianDigit();
@@ -31,6 +31,15 @@ String formatDoubleWithoutTrailingZeros(double value) {
   }
 }
 
+String formatNumberFa(dynamic value) {
+  final double v = value is num
+      ? value.toDouble()
+      : double.tryParse(value.toString()) ?? 0;
+
+  final formatted = NumberFormat('#,###.###').format(v);
+  return formatted.toPersianDigit();
+}
+
 String formatWithSeparator(double value) {
   if (value == 0) return '';
   return NumberFormat('#,###').format(value);
@@ -38,7 +47,12 @@ String formatWithSeparator(double value) {
 
 String formatJalaliDate(DateTime dt) {
   final j = Jalali.fromDateTime(dt);
-  return '${j.year}/${j.month.toString().padLeft(2, '0')}/${j.day.toString().padLeft(2, '0')}';
+  return '${j.year}/${j.month.toString().padLeft(2, '0')}/${j.day.toString().padLeft(2, '0')}'
+      .toPersianDigit();
+}
+
+String formatTime(DateTime dt) {
+  return DateFormat('HH:mm').format(dt).toPersianDigit();
 }
 
 String coinName(String t) {
@@ -93,10 +107,56 @@ String numberToTomanWords(double amount) {
   final toman = amount / 10;
   final intValue = toman.round();
   final words = intValue.toString().toWord();
-  return words.toPersianDigit() + ' تومان';
+  return '${words.toPersianDigit()} تومان';
 }
 
-// -------------------- ویجت کمکی ورودی عدد با نمایش تومان --------------------
+String convertPersianDigitsToEnglish(String input) {
+  const persian = '۰۱۲۳۴۵۶۷۸۹';
+  const arabic = '٠١٢٣٤٥٦٧٨٩';
+
+  String result = input;
+
+  for (int i = 0; i < 10; i++) {
+    result = result
+        .replaceAll(persian[i], i.toString())
+        .replaceAll(arabic[i], i.toString());
+  }
+
+  return result;
+}
+
+// -------------------- Input Formatter --------------------
+class PersianAwareNumberFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty) return newValue;
+
+    final converted = convertPersianDigitsToEnglish(newValue.text);
+    final clean = converted.replaceAll(RegExp(r'[^\d]'), '');
+
+    if (clean.isEmpty) {
+      return const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
+      );
+    }
+
+    final intValue = int.tryParse(clean);
+    if (intValue == null) return newValue;
+
+    final formatted = NumberFormat('#,###').format(intValue);
+
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
+// -------------------- Number Input Widget --------------------
 class NumberInputWithToman extends StatefulWidget {
   final String label;
   final String? initialValue;
@@ -135,7 +195,9 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
   }
 
   void _updateDisplay(String value) {
-    final clean = value.replaceAll(RegExp(r'[^\d]'), '');
+    final converted = convertPersianDigitsToEnglish(value);
+    final clean = converted.replaceAll(RegExp(r'[^\d]'), '');
+
     if (clean.isNotEmpty && widget.isPrice) {
       final num = double.tryParse(clean) ?? 0;
       setState(() {
@@ -171,12 +233,12 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
           textAlign: TextAlign.left,
           textDirection: TextDirection.ltr,
           inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[0-9]')),
-            ThousandsSeparatorInputFormatter(),
+            PersianAwareNumberFormatter(),
           ],
           validator: widget.validator,
           onSaved: (v) {
-            final cleaned = v?.replaceAll(RegExp(r'[^\d]'), '') ?? '';
+            final converted = convertPersianDigitsToEnglish(v ?? '');
+            final cleaned = converted.replaceAll(RegExp(r'[^\d]'), '');
             widget.onSaved(cleaned);
           },
         ),
@@ -204,28 +266,6 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
   }
 }
 
-class ThousandsSeparatorInputFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    if (newValue.text.isEmpty) return newValue;
-
-    final clean = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
-    if (clean.isEmpty) return newValue;
-
-    final intValue = int.tryParse(clean);
-    if (intValue == null) return newValue;
-
-    final formatted = NumberFormat('#,###').format(intValue);
-    return newValue.copyWith(
-      text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
-    );
-  }
-}
-
 Future<DateTime?> pickJalaliDate(BuildContext context, DateTime initial) async {
   final picked = await showPersianDatePicker(
     context: context,
@@ -236,7 +276,7 @@ Future<DateTime?> pickJalaliDate(BuildContext context, DateTime initial) async {
   return picked;
 }
 
-// -------------------- سرویس دریافت قیمت زنده --------------------
+// -------------------- ApiService --------------------
 class ApiService {
   static const String _pageUrl = 'https://www.estjt.ir/price/';
   static const Map<String, String> _nameToKey = {
@@ -355,7 +395,7 @@ class ApiService {
   }
 }
 
-// -------------------- PriceProvider (زنده) --------------------
+// -------------------- PriceProvider --------------------
 class PriceProvider extends ChangeNotifier {
   Map<String, PriceResponse> _prices = {};
   Map<String, PriceResponse> _lastSavedPrices = {};
