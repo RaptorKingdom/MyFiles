@@ -172,12 +172,16 @@ class SettingsProvider extends ChangeNotifier {
   double _bankInterestRate = 26.0;
   int _autoUpdateInterval = 300;
   Color _secondaryColor = Colors.amber;
-  Color _menuColor = Colors.black;
+  Color _menuColor = const Color(0xFF111111);
+  double _menuBottomPadding = 12.0;
+  double _menuWidthPercent = 95.0;
 
   double get bankInterestRate => _bankInterestRate;
   int get autoUpdateInterval => _autoUpdateInterval;
   Color get secondaryColor => _secondaryColor;
   Color get menuColor => _menuColor;
+  double get menuBottomPadding => _menuBottomPadding;
+  double get menuWidthPercent => _menuWidthPercent;
 
   final SharedPreferences _prefs;
 
@@ -188,29 +192,32 @@ class SettingsProvider extends ChangeNotifier {
   void _loadSettings() {
     _bankInterestRate = _prefs.getDouble('bankInterestRate') ?? 26.0;
     _autoUpdateInterval = _prefs.getInt('autoUpdateInterval') ?? 300;
+    _menuBottomPadding = _prefs.getDouble('menuBottomPadding') ?? 12.0;
+    _menuWidthPercent = _prefs.getDouble('menuWidthPercent') ?? 95.0;
 
     final colorStr = _prefs.getString('secondaryColor');
     if (colorStr != null) {
       try {
-        if (colorStr.startsWith('#')) {
-          _secondaryColor = Color(int.parse(colorStr.substring(1), radix: 16));
-        } else {
-          _secondaryColor = Color(int.parse(colorStr));
-        }
+        _secondaryColor = _parseColor(colorStr);
       } catch (_) {}
     }
-
     final menuColorStr = _prefs.getString('menuColor');
     if (menuColorStr != null) {
       try {
-        if (menuColorStr.startsWith('#')) {
-          _menuColor = Color(int.parse(menuColorStr.substring(1), radix: 16));
-        } else {
-          _menuColor = Color(int.parse(menuColorStr));
-        }
+        _menuColor = _parseColor(menuColorStr);
       } catch (_) {}
     }
   }
+
+  Color _parseColor(String s) {
+    if (s.startsWith('#')) {
+      return Color(int.parse(s.substring(1), radix: 16));
+    }
+    return Color(int.parse(s));
+  }
+
+  String _colorToString(Color c) =>
+      '#${c.value.toRadixString(16).padLeft(8, '0')}';
 
   Future<void> setBankInterestRate(double v) async {
     _bankInterestRate = v;
@@ -226,15 +233,25 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> setSecondaryColor(Color c) async {
     _secondaryColor = c;
-    final hexColor = '#${c.value.toRadixString(16).padLeft(8, '0')}';
-    await _prefs.setString('secondaryColor', hexColor);
+    await _prefs.setString('secondaryColor', _colorToString(c));
     notifyListeners();
   }
 
   Future<void> setMenuColor(Color c) async {
     _menuColor = c;
-    final hexColor = '#${c.value.toRadixString(16).padLeft(8, '0')}';
-    await _prefs.setString('menuColor', hexColor);
+    await _prefs.setString('menuColor', _colorToString(c));
+    notifyListeners();
+  }
+
+  Future<void> setMenuBottomPadding(double v) async {
+    _menuBottomPadding = v;
+    await _prefs.setDouble('menuBottomPadding', v);
+    notifyListeners();
+  }
+
+  Future<void> setMenuWidthPercent(double v) async {
+    _menuWidthPercent = v;
+    await _prefs.setDouble('menuWidthPercent', v);
     notifyListeners();
   }
 }
@@ -370,6 +387,7 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // -------------------- Sell (منطق اصلی و درست) --------------------
   Future<void> sellGold(
     GoldTransaction lot,
     double quantity,
@@ -425,21 +443,24 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // -------------------- Delete Sale (برگشت مقدار به دارایی) --------------------
   Future<void> deleteSale(SaleTransaction sale) async {
     if (sale.isGold) {
       final lot = goldBox.get(sale.lotId);
       if (lot != null) {
-        double newRemaining = lot.remainingQuantity + sale.quantity;
-        if (newRemaining > lot.quantity) newRemaining = lot.quantity;
-        lot.remainingQuantity = newRemaining;
+        lot.remainingQuantity = lot.remainingQuantity + sale.quantity;
+        if (lot.remainingQuantity > lot.quantity) {
+          lot.remainingQuantity = lot.quantity;
+        }
+        if (lot.remainingQuantity < 0) lot.remainingQuantity = 0;
         await lot.save();
       }
     } else {
       final lot = coinBox.get(sale.lotId);
       if (lot != null) {
-        int newRemaining = lot.remainingCount + sale.quantity.toInt();
-        if (newRemaining > lot.count) newRemaining = lot.count;
-        lot.remainingCount = newRemaining;
+        lot.remainingCount = lot.remainingCount + sale.quantity.toInt();
+        if (lot.remainingCount > lot.count) lot.remainingCount = lot.count;
+        if (lot.remainingCount < 0) lot.remainingCount = 0;
         await lot.save();
       }
     }
@@ -448,40 +469,42 @@ class DataProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // -------------------- Update Sale (تنظیم دقیق باقی‌مانده) --------------------
   Future<void> updateSale(
     SaleTransaction sale, {
-    required double quantity,
-    required double pricePerUnit,
-    required DateTime saleDate,
+    required double newQuantity,
+    required double newPrice,
+    required DateTime newDate,
   }) async {
-    if (quantity <= 0 || pricePerUnit <= 0) return;
+    if (newQuantity <= 0 || newPrice <= 0) return;
 
-    final oldQty = sale.quantity;
-    final qtyDiff = oldQty - quantity;
+    final oldQuantity = sale.quantity;
 
     if (sale.isGold) {
       final lot = goldBox.get(sale.lotId);
       if (lot != null) {
-        double newRemaining = lot.remainingQuantity + qtyDiff;
-        if (newRemaining < 0) newRemaining = 0;
-        if (newRemaining > lot.quantity) newRemaining = lot.quantity;
-        lot.remainingQuantity = newRemaining;
+        // مقدار فروخته‌شدهٔ قبلی را برمی‌گردانیم و مقدار جدید را کم می‌کنیم
+        lot.remainingQuantity = lot.remainingQuantity + oldQuantity - newQuantity;
+        if (lot.remainingQuantity > lot.quantity) {
+          lot.remainingQuantity = lot.quantity;
+        }
+        if (lot.remainingQuantity < 0) lot.remainingQuantity = 0;
         await lot.save();
       }
     } else {
       final lot = coinBox.get(sale.lotId);
       if (lot != null) {
-        int newRemaining = lot.remainingCount + qtyDiff.toInt();
-        if (newRemaining < 0) newRemaining = 0;
-        if (newRemaining > lot.count) newRemaining = lot.count;
-        lot.remainingCount = newRemaining;
+        lot.remainingCount =
+            lot.remainingCount + oldQuantity.toInt() - newQuantity.toInt();
+        if (lot.remainingCount > lot.count) lot.remainingCount = lot.count;
+        if (lot.remainingCount < 0) lot.remainingCount = 0;
         await lot.save();
       }
     }
 
-    sale.quantity = quantity;
-    sale.salePricePerUnit = pricePerUnit;
-    sale.saleDate = saleDate;
+    sale.quantity = newQuantity;
+    sale.salePricePerUnit = newPrice;
+    sale.saleDate = newDate;
     await sale.save();
     notifyListeners();
   }
@@ -524,7 +547,6 @@ class DataProvider extends ChangeNotifier {
       final cp = currentPrices[g.type] ?? 0;
       final paid = g.purchasePricePerUnit * g.remainingQuantity;
       final days = Calculator.daysBetween(g.purchaseDate, endDate);
-
       if (deductBankInterest) {
         profit += Calculator.calculateProfit(
           currentPrice: cp,
@@ -547,7 +569,6 @@ class DataProvider extends ChangeNotifier {
       final cp = currentPrices[c.coinType] ?? 0;
       final paid = c.purchasePricePerUnit * c.remainingCount;
       final days = Calculator.daysBetween(c.purchaseDate, endDate);
-
       if (deductBankInterest) {
         profit += Calculator.calculateProfit(
           currentPrice: cp,

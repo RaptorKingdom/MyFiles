@@ -129,20 +129,16 @@ class PersianAwareNumberFormatter extends TextInputFormatter {
     TextEditingValue newValue,
   ) {
     if (newValue.text.isEmpty) return newValue;
-
     final converted = convertPersianDigitsToEnglish(newValue.text);
     final clean = converted.replaceAll(RegExp(r'[^\d]'), '');
-
     if (clean.isEmpty) {
       return const TextEditingValue(
         text: '',
         selection: TextSelection.collapsed(offset: 0),
       );
     }
-
     final intValue = int.tryParse(clean);
     if (intValue == null) return newValue;
-
     final formatted = NumberFormat('#,###').format(intValue);
     return TextEditingValue(
       text: formatted,
@@ -185,14 +181,12 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
   @override
   void initState() {
     super.initState();
-
     if (widget.controller != null) {
       _controller = widget.controller!;
     } else {
       _controller = TextEditingController(text: widget.initialValue ?? '');
       _ownsController = true;
     }
-
     _updateDisplay(_controller.text);
     _controller.addListener(_onTextChanged);
   }
@@ -202,7 +196,6 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
   void _updateDisplay(String value) {
     final converted = convertPersianDigitsToEnglish(value);
     final clean = converted.replaceAll(RegExp(r'[^\d]'), '');
-
     if (clean.isNotEmpty && widget.isPrice) {
       final num = double.tryParse(clean) ?? 0;
       setState(() {
@@ -242,13 +235,13 @@ class _NumberInputWithTomanState extends State<NumberInputWithToman> {
             PersianAwareNumberFormatter(),
           ],
           validator: widget.validator,
-          onSaved: widget.onSaved != null
-              ? (v) {
+          onSaved: widget.onSaved == null
+              ? null
+              : (v) {
                   final converted = convertPersianDigitsToEnglish(v ?? '');
                   final cleaned = converted.replaceAll(RegExp(r'[^\d]'), '');
                   widget.onSaved!(cleaned);
-                }
-              : null,
+                },
         ),
         if (_tomanText.isNotEmpty && widget.isPrice)
           Padding(
@@ -337,30 +330,23 @@ class ApiService {
         'Accept': 'text/html',
         'Accept-Language': 'en-US,en;q=0.5',
       });
-
       if (res.statusCode != 200) return {};
-
       final doc = html_parser.parse(res.body);
       final rows = doc.querySelectorAll('div.price-box table tbody tr');
       final Map<String, PriceResponse> prices = {};
-
       for (final row in rows) {
         final cells = row.querySelectorAll('td');
         if (cells.length < 6) continue;
-
         final name = cells[0].text.trim();
         final key = _nameToKey[name];
         if (key == null) continue;
-
         var cur = _parsePrice(cells[1].text.trim());
         var high = _parsePrice(cells[2].text.trim());
         var low = _parsePrice(cells[3].text.trim());
         var yday = _parsePrice(cells[4].text.trim());
-
         String? dir;
         double? cVal;
         double? cPct;
-
         final span = cells[5].querySelector('span');
         if (span != null) {
           if (span.classes.contains('asc')) {
@@ -368,14 +354,12 @@ class ApiService {
           } else if (span.classes.contains('desc')) {
             dir = 'down';
           }
-
           final cd = _parseChange(span.text.trim());
           if (cd != null) {
             cVal = cd['value'];
             cPct = cd['percent'];
           }
         }
-
         const rialsMultiplier = 10.0;
         if (key != 'gold_ons') {
           cur = cur != null ? cur * rialsMultiplier : null;
@@ -384,7 +368,6 @@ class ApiService {
           yday = yday != null ? yday * rialsMultiplier : null;
           if (cVal != null) cVal = cVal * rialsMultiplier;
         }
-
         prices[key] = PriceResponse(
           name: name,
           currentPrice: cur,
@@ -394,7 +377,6 @@ class ApiService {
           change: Change(value: cVal, percent: cPct, direction: dir),
         );
       }
-
       return prices;
     } catch (_) {
       return {};
@@ -442,7 +424,6 @@ class PriceProvider extends ChangeNotifier {
         } catch (_) {}
       }
     }
-
     if (_lastSavedPrices.isNotEmpty) {
       _prices = Map.from(_lastSavedPrices);
       int? t = _prefs.getInt('last_update');
@@ -468,7 +449,6 @@ class PriceProvider extends ChangeNotifier {
       });
       await _prefs.setString('price_${e.key}', jsonStr);
     }
-
     await _prefs.setInt(
       'last_update',
       DateTime.now().millisecondsSinceEpoch,
