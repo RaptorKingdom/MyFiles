@@ -7,11 +7,17 @@ on:
         description: 'مدت زمان اجرا (دقیقه)'
         required: true
         default: '120'
+      project_folder:
+        description: 'نام پوشه پروژه فلاتر (پیش‌فرض: flutter_app)'
+        required: true
+        default: 'flutter_app'
 
 jobs:
   flutter-api:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      PROJECT_DIR: ${{ github.event.inputs.project_folder }}
 
     steps:
       - name: دریافت کد مخزن
@@ -38,9 +44,9 @@ jobs:
           path: |
             ~/.pub-cache
             ~/.gradle/caches
-            flutter_app/.dart_tool
-            flutter_app/build
-          key: ${{ runner.os }}-flutter-${{ hashFiles('flutter_app/pubspec.lock') }}
+            ${{ env.PROJECT_DIR }}/.dart_tool
+            ${{ env.PROJECT_DIR }}/build
+          key: ${{ runner.os }}-flutter-${{ hashFiles(format('{0}/pubspec.lock', env.PROJECT_DIR)) }}
           restore-keys: |
             ${{ runner.os }}-flutter-
 
@@ -52,8 +58,8 @@ jobs:
 
       - name: اطمینان از وجود پروژه فلاتر (فقط بار اول)
         run: |
-          if [ ! -d "flutter_app" ]; then
-            flutter create flutter_app
+          if [ ! -d "$PROJECT_DIR" ]; then
+            flutter create "$PROJECT_DIR"
           fi
 
       - name: نوشتن سرور API
@@ -64,7 +70,7 @@ jobs:
           from flask import Flask, request, send_file, jsonify, Response
 
           app = Flask(__name__)
-          PROJECT_DIR = os.path.join(os.getcwd(), 'flutter_app')
+          PROJECT_DIR = os.path.join(os.getcwd(), os.environ.get('PROJECT_DIR', 'flutter_app'))
           USERNAME = os.environ['RDP_USERNAME']
           PASSWORD = os.environ['RDP_PASSWORD']
           START_TIME = time.time()
@@ -470,6 +476,7 @@ jobs:
           export RDP_USERNAME="${{ secrets.RDP_USERNAME }}"
           export RDP_PASSWORD="${{ secrets.RDP_PASSWORD }}"
           export SESSION_MINUTES="${{ github.event.inputs.session_minutes }}"
+          export PROJECT_DIR="$PROJECT_DIR"
           nohup python3 api_server.py > api_server.log 2>&1 &
           echo "سرور API روی پورت 5000 اجرا شد"
 
@@ -578,11 +585,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -d "flutter_app" ]; then
-            if git diff --quiet flutter_app/ && [ -z "$(git ls-files --others --exclude-standard flutter_app/)" ]; then
+          if [ -d "$PROJECT_DIR" ]; then
+            if git diff --quiet "$PROJECT_DIR/" && [ -z "$(git ls-files --others --exclude-standard "$PROJECT_DIR/")" ]; then
               echo "بدون تغییر"
             else
-              git add flutter_app/
+              git add "$PROJECT_DIR/"
               git commit -m "ذخیره تغییرات پروژه [skip ci]"
               git push
             fi
